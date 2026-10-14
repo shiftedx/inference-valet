@@ -32,7 +32,7 @@ Windows tray controller for external Strata: Tkinter/ttk UI, verified process co
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Use isolated `AI_PROFILES_CONFIG` / `state_dir` and all five Strata presets for the complete selection suite. Native HTTP tests skip without Strata; for full integration, use its dependency-complete Python and add Valet's site-packages to `PYTHONPATH` if needed. Report passed/skipped separately. A UI check is not a load/inference check. GitHub CI runs backend-independent Windows tests.
+Use isolated `AI_PROFILES_CONFIG` / `state_dir`, `on_demand.enabled=true` and all five Strata presets for the complete selection/policy suite. Native HTTP tests skip without Strata; for full integration, use its dependency-complete Python and add Valet's site-packages to `PYTHONPATH` if needed. Report passed/skipped separately. A UI check is not a load/inference check. GitHub CI runs backend-independent Windows tests.
 
 ## Preserve contracts
 

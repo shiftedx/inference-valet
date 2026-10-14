@@ -90,7 +90,7 @@ Reuse a known-working upstream configuration for model/runtime paths. Retain pro
 
 ## Test without touching production
 
-Set `AI_PROFILES_CONFIG` to a temporary JSON file with a separate `state_dir`; omit `enabled_profiles` to exercise all five preset IDs. Point `strata_root` at a compatible Strata checkout for native HTTP tests, or an absent directory for core-only tests. The suite uses a simulated engine, not live model prompts. Install dependencies under the interpreter that runs the suite. Report native skips explicitly.
+Set `AI_PROFILES_CONFIG` to a temporary JSON file with a separate `state_dir` and `on_demand.enabled=true`; omit `enabled_profiles` to exercise all five preset IDs. Point `strata_root` at a compatible Strata checkout for native HTTP tests, or an absent directory for core-only tests. The suite uses a simulated engine, not live model prompts. Install dependencies under the interpreter that runs the suite. Report native skips explicitly.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
