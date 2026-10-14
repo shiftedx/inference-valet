@@ -95,6 +95,12 @@ class LayoutTests(unittest.TestCase):
             self.assertIsNone(panel.history[-1]['output'])
             self.assertEqual(panel.history[-1]['gpu'], 0)
             self.assertEqual(panel.history[-1]['cpu'], 20)
+            # Hosted Windows desktops may be smaller than the simulated DPI size.
+            # Give this geometry test an explicit canvas large enough to stretch.
+            app.window.maxsize(10000,10000)
+            minimum=app.dashboard_canvas.winfo_children()[0].winfo_reqheight()+round(80*app.ui_scale)
+            app.window.geometry(f'{app.window.winfo_width()}x{max(minimum,app.window.winfo_height())}')
+            app.window.update()
             height = panel.graph.winfo_height()
             app.window.geometry(f'{app.window.winfo_width()}x{app.window.winfo_height()+round(100*app.ui_scale)}')
             app.window.update()
@@ -298,18 +304,30 @@ class LayoutTests(unittest.TestCase):
                     bottom = top + app.dashboard_canvas.winfo_height()
                     readings = list(app.performance.metric_widgets.values())
                     self.assertEqual(len(readings), 6)
+                    content=app.dashboard_canvas.winfo_children()[0]
+                    fits=content.winfo_reqheight()<=app.dashboard_canvas.winfo_height()
                     for control in (app.picker, app.start_button, app.stop_button,
                                     app.auto_control, app.performance.graph,
                                     app.performance.details_button, *app.performance.plots.values(), app.performance.context_graph, *readings):
                         self.assertTrue(control.winfo_ismapped())
-                        self.assertGreaterEqual(control.winfo_rooty(), top)
-                        self.assertLessEqual(control.winfo_rooty() + control.winfo_height(), bottom)
-                    self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                        if fits:
+                            self.assertGreaterEqual(control.winfo_rooty(), top)
+                            self.assertLessEqual(control.winfo_rooty() + control.winfo_height(), bottom)
+                    if fits:self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                    else:
+                        self.assertLess(app.dashboard_canvas.yview()[1],1)
+                        app.dashboard_canvas.yview_moveto(1);app.window.update()
+                        self.assertLessEqual(app.performance.details_button.winfo_rooty()+app.performance.details_button.winfo_height(),bottom)
+                        app.dashboard_canvas.yview_moveto(0)
                     app.status.set('Action failed: Free GPU memory and try loading this model again.')
                     app.update_controls()
                     app.performance.update({'hardware': {'ram_free_gib': 2, 'commit_free_gib': 3}})
                     app.window.update()
-                    self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                    if content.winfo_reqheight()<=app.dashboard_canvas.winfo_height():
+                        self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                    else:
+                        app.dashboard_canvas.yview_moveto(1);app.window.update()
+                        self.assertLessEqual(app.performance.details_button.winfo_rooty()+app.performance.details_button.winfo_height(),bottom)
                 finally:
                     app.quit()
 
@@ -321,8 +339,11 @@ class LayoutTests(unittest.TestCase):
             height = app.window.winfo_height()
             app.performance.toggle_details()
             app.window.update()
-            self.assertGreater(app.window.winfo_height(), height)
-            self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+            if app.window.winfo_height()>height:self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+            else:
+                # A screen already at its native height limit must stay accessible.
+                self.assertLess(app.dashboard_canvas.yview()[1],1)
+                app.dashboard_canvas.yview_moveto(1);app.window.update()
             self.assertFalse(hasattr(app.performance, 'detail_canvas'))
             self.assertEqual(len(app.performance.details), 18)
             bottom = app.dashboard_canvas.winfo_rooty()+app.dashboard_canvas.winfo_height()
