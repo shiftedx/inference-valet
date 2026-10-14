@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="180" viewBox="0 0 940 180" role="img" aria-labelledby="title desc">
+<title id="title">Game priority and automatic model restore</title><desc id="desc">A detected game blocks model loading. On-demand mode releases the model after its grace period. Close games and leave the computer idle for five to thirty minutes to restore, or load on the next request.</desc>
+<rect width="940" height="180" rx="16" fill="#17191b"/>
+<g font-family="Segoe UI,Arial,sans-serif" fill="#edece8">
+<circle cx="48" cy="52" r="15" fill="#daba87"/><text x="78" y="58" font-size="19" font-weight="600">Game detected</text>
+<text x="32" y="96" font-size="15" fill="#a4abae">Block new model loads</text><text x="32" y="123" font-size="15" fill="#a4abae">On demand: unload after grace</text>
+<path d="M300 65h40m-9-8 9 8-9 8" stroke="#383e41" stroke-width="3" fill="none"/>
+<circle cx="379" cy="52" r="15" fill="none" stroke="#a4abae" stroke-width="2"/><path d="M379 42v10l7 5" stroke="#a4abae" stroke-width="2" fill="none"/>
+<text x="410" y="58" font-size="19" font-weight="600">Games closed</text><text x="363" y="96" font-size="15" fill="#a4abae">Wait selected idle delay</text><text x="363" y="123" font-size="15" fill="#a4abae">5–30 minutes; default 20</text>
+<path d="M615 65h40m-9-8 9 8-9 8" stroke="#383e41" stroke-width="3" fill="none"/>
+<circle cx="701" cy="52" r="15" fill="#a5c6af"/><path d="m694 52 5 5 10-11" stroke="#17191b" stroke-width="2" fill="none"/>
+<text x="732" y="58" font-size="19" font-weight="600">Model available</text><text x="685" y="96" font-size="15" fill="#a4abae">Eager: restore last profile</text><text x="685" y="123" font-size="15" fill="#a4abae">On demand: first request*</text>
+<text x="32" y="160" font-size="12" fill="#a4abae">*Optional on-demand mode. Game, resource and recovery guards remain in force.</text>
+</g></svg>

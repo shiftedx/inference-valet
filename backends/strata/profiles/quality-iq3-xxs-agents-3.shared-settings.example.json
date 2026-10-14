@@ -1,0 +1,5 @@
+{
+  "max_tokens": 73728,
+  "reasoning_budget_tokens": 32768,
+  "reasoning_effort": "high"
+}

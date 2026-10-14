@@ -1,0 +1,15 @@
+{
+  "strata_root": "C:/AI/Strata-Valet",
+  "on_demand": {
+    "enabled": false,
+    "load_retry_seconds": 30,
+    "min_free_vram_mib": 24000,
+    "max_vram_used_mib": 4096,
+    "min_ram_gib": 26,
+    "min_commit_gib": 35
+  },
+  "enabled_profiles": [
+    "strata-128k",
+    "strata-3"
+  ]
+}

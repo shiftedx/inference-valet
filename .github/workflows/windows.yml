@@ -1,0 +1,22 @@
+name: Windows checks
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Isolated config and state
+        shell: pwsh
+        run: |
+          $config = Join-Path $env:RUNNER_TEMP 'valet-test-config.json'
+          @{strata_root=(Join-Path $env:RUNNER_TEMP 'external-strata');state_dir=(Join-Path $env:RUNNER_TEMP 'valet-state')} | ConvertTo-Json | Set-Content -LiteralPath $config
+          "AI_PROFILES_CONFIG=$config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - run: python -m unittest discover -s tests -v
+      - run: python ai-launcher.py --check-ui

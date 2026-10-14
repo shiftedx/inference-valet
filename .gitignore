@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+config.json
+launcher-logs/
+*.log
+*.pid
+*.lock
+*.tmp
+.env
+.env.*
+.coverage
+.pytest_cache/
+dist/
+
+# Local runtime and testing state
+.test-state/
+.test-config.json
+AIProfiles/
+profile-logs/
+profile-backups/
+integration-backups/
+*.jsonl
