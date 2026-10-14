@@ -11,6 +11,8 @@
 | Backend Python | `<root>/Strata/.venv/Scripts/python.exe`, or `strata_python` override |
 | API | Native `/health`, `/v1/models`, `/v1/status`, `/metrics`, load/unload lifecycle; port 8080 |
 
+This integration's preflight/admission sampler requires NVIDIA `nvidia-smi`. Other Strata-supported GPUs need a resource-sampler adaptation before these managed wrappers can be used; unknown resource state blocks loading.
+
 ```powershell
 # Run from the Valet checkout after scripts/setup.ps1.
 .\.venv\Scripts\python.exe scripts/install-strata-integration.py --root C:/AI/Strata-Valet --install-examples

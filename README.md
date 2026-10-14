@@ -26,7 +26,7 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 
 ## Run
 
-**Windows 10/11 · Python ≥3.11 with Tcl/Tk · installed [Strata](https://github.com/Niko1221/Strata) and model files.** NVIDIA telemetry uses `nvidia-smi`; unavailable readings display `—`.
+**Windows 10/11 · NVIDIA GPU / `nvidia-smi` · Python ≥3.11 with Tcl/Tk · installed [Strata](https://github.com/Niko1221/Strata) and model files.** This managed integration targets NVIDIA; unavailable readings display `—`.
 
 ```powershell
 git clone https://github.com/shiftedx/inference-valet.git
