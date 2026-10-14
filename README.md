@@ -53,7 +53,7 @@ notepad .\config.json
 | Restore when idle → off | Persistently pause idle GPU reload |
 | Tray left-click / right-click | Quick controls / actions and Exit Valet |
 
-<p align="center"><img src="docs/assets/profile-editor.png" width="590" alt="Aligned Strata profile editor"> <img src="docs/assets/tray.png" width="300" alt="Compact native tray controls"></p>
+<p align="center"><img src="docs/assets/profile-editor.png" width="590" alt="Aligned Strata profile editor"></p>
 
 ## Limited RAM / maximum performance
 
