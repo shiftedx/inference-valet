@@ -9,7 +9,10 @@ def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     try:
-        temp.write_text(json.dumps(value, indent=2), encoding='utf-8')
+        with temp.open('w',encoding='utf-8') as output:
+            output.write(json.dumps(value, indent=2))
+            output.flush()
+            os.fsync(output.fileno())
         temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)

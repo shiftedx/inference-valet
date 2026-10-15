@@ -1,6 +1,8 @@
 # Recovery and startup diagnostics
 
 - Keep Valet running in the tray; existing sign-in task starts it.
+- Damaged saved preferences: recover the last valid backup when available, pause automatic loading, and keep the dashboard usable. Choose Load model or enable idle restore explicitly to resume. The next preference update preserves the damaged bytes for diagnosis.
+- Preference updates retain a `.bak` copy; JSON state writes flush to disk before replacing the previous file.
 - Missing on-demand Strata listener: inspect every 10 seconds; restore unloaded HTTP listener independently of the idle timer.
 - Refuse recovery while a verified engine/server process or another application owns the port; inspect the log if an owned process is alive but its API is unavailable.
 - Recover at most three times per 10-minute window; 5/15/60-second minimum retry delays; persist attempts across tray restarts.

@@ -1,6 +1,7 @@
 """Windows idle reload policy and persistent controls for Inference Valet."""
 import contextlib, ctypes, json, msvcrt, os, pathlib, re, time, winreg
 import psutil
+from ai_issues import write_json
 
 IDLE_MINUTES=(5,10,15,20,25,30)
 
@@ -9,12 +10,24 @@ def restore_minutes(value):
 
 class Settings:
  def __init__(self,path):self.path=pathlib.Path(path)
+ @staticmethod
+ def normalize(data):
+  if not isinstance(data,dict):raise ValueError('Settings must be an object')
+  games=data.get('extra_games',[]);profile=data.get('last_profile')
+  if not isinstance(games,list) or any(not isinstance(game,str) for game in games):raise ValueError('extra_games must contain executable paths')
+  if profile is not None and not isinstance(profile,str):raise ValueError('last_profile must be a profile ID')
+  return dict(idle_minutes=restore_minutes(data.get('idle_minutes')),enabled=data.get('enabled',True) is True,last_profile=profile,extra_games=games,demand_armed=data.get('demand_armed',True) is True)
+ def load(self,path):return self.normalize(json.loads(path.read_text(encoding='utf-8-sig')))
  def read(self):
-  try:
-   data=json.loads(self.path.read_text(encoding='utf-8'))
-   if not isinstance(data,dict):raise ValueError('Settings must be an object')
-   return dict(idle_minutes=restore_minutes(data.get('idle_minutes')),enabled=data.get('enabled',True) is True,last_profile=data.get('last_profile'),extra_games=data.get('extra_games',[]),demand_armed=data.get('demand_armed',True) is True)
-  except FileNotFoundError:return dict(idle_minutes=20,enabled=True,last_profile=None,extra_games=[],demand_armed=True)
+  try:return self.load(self.path)
+  except FileNotFoundError:
+   if not self.path.with_suffix('.bak').exists():return self.normalize({})
+  except (ValueError,UnicodeError):pass
+  # A stale backup must never undo a manual Unload or rearm automatic loading.
+  try:data=self.load(self.path.with_suffix('.bak'))
+  except (OSError,ValueError,UnicodeError):data=self.normalize({})
+  data.update(enabled=False,demand_armed=False)
+  return data
  def update(self,**changes):
   self.path.parent.mkdir(parents=True,exist_ok=True)
   with self.path.with_suffix('.lock').open('a+b') as lock:
@@ -26,7 +39,15 @@ class Settings:
      time.sleep(.05)
    try:
     data=self.read();data.update(changes)
-    temp=self.path.with_suffix('.tmp');temp.write_text(json.dumps(data,indent=2),encoding='utf-8');temp.replace(self.path)
+    try:previous=self.load(self.path)
+    except FileNotFoundError:previous=None
+    except (ValueError,UnicodeError):
+     # Preserve unreadable bytes before the first explicit preference update.
+     damaged=self.path.with_name(self.path.stem+'.corrupt-'+str(time.time_ns())+self.path.suffix)
+     with damaged.open('xb') as saved:saved.write(self.path.read_bytes());saved.flush();os.fsync(saved.fileno())
+     previous=None
+    if previous is not None:write_json(self.path.with_suffix('.bak'),previous)
+    write_json(self.path,data)
     return data
    finally:lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
 

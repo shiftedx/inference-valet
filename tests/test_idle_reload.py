@@ -4,6 +4,29 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 spec=importlib.util.spec_from_file_location('ai_idle', pathlib.Path(__file__).resolve().parents[1]/'ai_idle.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 class ReloadTests(unittest.TestCase):
+ def test_corrupt_preferences_allow_startup_without_automatic_loading(self):
+  with tempfile.TemporaryDirectory() as d:
+   settings=m.Settings(pathlib.Path(d)/'settings.json')
+   for damaged in (b'\x00'*127,b'',b'{"enabled":',b'[]',b'\xff\xfe'):
+    settings.path.write_bytes(damaged)
+    data=settings.read()
+    self.assertFalse(data['enabled']);self.assertFalse(data['demand_armed'])
+    self.assertIsNone(data['last_profile'])
+    self.assertEqual(settings.path.read_bytes(),damaged)
+ def test_valid_backup_restores_preferences_but_cannot_rearm_loading(self):
+  with tempfile.TemporaryDirectory() as d:
+   settings=m.Settings(pathlib.Path(d)/'settings.json')
+   settings.update(last_profile='strata-3',idle_minutes=10,extra_games=['C:/Games/game.exe'])
+   settings.update(demand_armed=False)
+   settings.path.write_bytes(b'\x00'*127)
+   data=settings.read()
+   self.assertEqual(data['last_profile'],'strata-3');self.assertEqual(data['idle_minutes'],10)
+   self.assertEqual(data['extra_games'],['C:/Games/game.exe'])
+   self.assertFalse(data['enabled']);self.assertFalse(data['demand_armed'])
+   settings.update(enabled=True)
+   self.assertTrue(settings.read()['enabled']);self.assertFalse(settings.read()['demand_armed'])
+   backups=list(settings.path.parent.glob('settings.corrupt-*.json'))
+   self.assertEqual(len(backups),1);self.assertEqual(backups[0].read_bytes(),b'\x00'*127)
  def test_idle_boundary_and_input(self):
   p=m.IdlePolicy(0)
   self.assertFalse(p.decide(1199,1199,[],False,True,'strata-128k',0)[0])
