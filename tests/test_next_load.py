@@ -219,7 +219,8 @@ class PendingMemoryTests(unittest.TestCase):
         calls = 0
         def fingerprint(path):
             nonlocal calls
-            if path == self.profile:
+            # Windows runner TEMP may use an alias normalized by apply_pending_memory.
+            if path.resolve() == self.profile.resolve():
                 calls += 1
                 if calls == 2:
                     return 'changed'

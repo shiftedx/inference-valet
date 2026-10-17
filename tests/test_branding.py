@@ -68,6 +68,38 @@ class BrandingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     branding.icon_image(size)
 
+    def test_taskbar_icon_location_changes_only_when_artwork_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / 'current.ico'
+            cache = root / 'cache'
+            original = (branding.ASSETS / 'inference-valet.ico').read_bytes()
+            source.write_bytes(original)
+            first = branding.taskbar_icon_path(source, cache)
+            self.assertEqual(first.parent, cache)
+            self.assertEqual(first.read_bytes(), original)
+            self.assertIn(hashlib.sha256(original).hexdigest(), first.name)
+            stamp = first.stat().st_mtime_ns
+            self.assertEqual(branding.taskbar_icon_path(source, cache), first)
+            self.assertEqual(first.stat().st_mtime_ns, stamp)
+            branding.icon_image(64, tray=True).save(source, format='ICO', sizes=[(64, 64)])
+            updated = source.read_bytes()
+            second = branding.taskbar_icon_path(source, cache)
+            self.assertNotEqual(first, second)
+            self.assertEqual(second.read_bytes(), updated)
+            self.assertEqual(first.read_bytes(), original)  # Existing pinned links remain valid.
+            self.assertEqual(sorted(path.suffix for path in cache.iterdir()), ['.ico', '.ico'])
+
+    def test_taskbar_icon_repairs_incomplete_cache_without_changing_location(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = branding.ASSETS / 'inference-valet.ico'
+            target = branding.taskbar_icon_path(source, root)
+            target.write_bytes(b'incomplete')
+            self.assertEqual(branding.taskbar_icon_path(source, root), target)
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            self.assertEqual(list(root.iterdir()), [target])
+
 
 if __name__ == '__main__':
     unittest.main()

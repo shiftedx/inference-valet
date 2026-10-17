@@ -336,14 +336,16 @@ class LayoutTests(unittest.TestCase):
         try:
             app.window.update()
             before = app.window.geometry()
-            height = app.window.winfo_height()
             app.performance.toggle_details()
             app.window.update()
-            if app.window.winfo_height()>height:self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+            content = app.dashboard_canvas.winfo_children()[0]
+            if content.winfo_reqheight() <= app.dashboard_canvas.winfo_height():
+                self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
             else:
-                # A screen already at its native height limit must stay accessible.
-                self.assertLess(app.dashboard_canvas.yview()[1],1)
+                # Growth may stop partway at the desktop work-area limit.
+                self.assertLess(app.dashboard_canvas.yview()[1], 1)
                 app.dashboard_canvas.yview_moveto(1);app.window.update()
+                self.assertEqual(app.dashboard_canvas.yview()[1], 1)
             self.assertFalse(hasattr(app.performance, 'detail_canvas'))
             self.assertEqual(len(app.performance.details), 18)
             bottom = app.dashboard_canvas.winfo_rooty()+app.dashboard_canvas.winfo_height()

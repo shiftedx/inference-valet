@@ -11,6 +11,8 @@ if (-not $NoDesktop) { $locations += [Environment]::GetFolderPath('Desktop') }
 $shell = New-Object -ComObject WScript.Shell
 Push-Location -LiteralPath $repoRoot
 try {
+ $icon = & $python -c 'from ai_branding import taskbar_icon_path; print(taskbar_icon_path())'
+ if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the versioned app icon.' }
  foreach ($location in $locations) {
   $path = Join-Path $location 'Inference Valet.lnk'
   $shortcut = $shell.CreateShortcut($path)

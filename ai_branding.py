@@ -1,6 +1,9 @@
 """The folded-V identity, shared by Windows, the tray, and documentation."""
 import base64
+import hashlib
+import os
 from pathlib import Path
+import tempfile
 from PIL import Image, ImageDraw
 from ai_theme import THEME
 
@@ -84,9 +87,42 @@ def apply_window_icon(window):
              for size in (16, 32, 48, 64)]
     window.iconphoto(True, *icons)
     window._valet_icons = icons
-    ico = Path(__file__).parent / 'docs' / 'assets' / 'inference-valet.ico'
+    ico = ASSETS / 'inference-valet.ico'
     if ico.is_file():
+        try:
+            ico = taskbar_icon_path()
+        except OSError:
+            pass  # Keep the current icon usable when the local cache is unwritable.
         window.iconbitmap(str(ico))
+
+
+def taskbar_icon_path(source=None, cache_dir=None):
+    """Give Windows a new icon location whenever the artwork changes.
+
+    Shell links and Tk use the same content-addressed local file, avoiding stale
+    shell cache entries for the stable public asset path. Old files remain valid
+    for pinned shortcuts until those shortcuts are refreshed.
+    """
+    source = Path(source) if source is not None else ASSETS / 'inference-valet.ico'
+    if cache_dir is None:
+        from ai_config import STATE_DIR
+        cache_dir = STATE_DIR / 'icons'
+    cache_dir = Path(cache_dir)
+    content = source.read_bytes()
+    target = cache_dir / ('inference-valet-' + hashlib.sha256(content).hexdigest() + '.ico')
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    if target.is_file() and target.read_bytes() == content:
+        return target
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=cache_dir, suffix='.tmp', delete=False) as output:
+            temporary = Path(output.name)
+            output.write(content)
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return target
 
 
 def set_shortcut_app_id(path):

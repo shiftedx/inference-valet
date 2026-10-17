@@ -11,6 +11,9 @@ from ai_telemetry import PerformancePanel, THEME
 class ActivityPanelTests(unittest.TestCase):
     def setUp(self):
         self.root = tk.Tk()
+        # Standalone panel tests need their requested workspace even on the
+        # smaller desktop used by hosted Windows runners.
+        self.root.maxsize(10000, 10000)
         self.root.geometry('760x650')
 
     def tearDown(self):
@@ -118,12 +121,28 @@ class ActivityPanelTests(unittest.TestCase):
                     app.window.update()
                     top = app.dashboard_canvas.winfo_rooty()
                     bottom = top + app.dashboard_canvas.winfo_height()
-                    for widget in (*app.performance.metric_widgets.values(), app.performance.details_button,
-                                   app.performance.activity_header):
+                    widgets = (*app.performance.metric_widgets.values(), app.performance.details_button,
+                               app.performance.activity_header)
+                    content = app.dashboard_canvas.winfo_children()[0]
+                    fits = content.winfo_reqheight() <= app.dashboard_canvas.winfo_height()
+                    for widget in widgets:
                         self.assertTrue(widget.winfo_ismapped())
-                        self.assertGreaterEqual(widget.winfo_rooty(), top)
-                        self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
-                    self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                        if fits:
+                            self.assertGreaterEqual(widget.winfo_rooty(), top)
+                            self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
+                    if fits:
+                        self.assertEqual(app.dashboard_canvas.yview(), (0.0, 1.0))
+                    else:
+                        # A DPI simulation can exceed the runner's actual work
+                        # area. Verify every control remains reachable by scroll.
+                        self.assertLess(app.dashboard_canvas.yview()[1], 1)
+                        for widget in widgets:
+                            offset = widget.winfo_rooty() - content.winfo_rooty()
+                            app.dashboard_canvas.yview_moveto(offset / content.winfo_height())
+                            app.window.update()
+                            self.assertGreaterEqual(widget.winfo_rooty(), top)
+                            self.assertLessEqual(widget.winfo_rooty() + widget.winfo_height(), bottom)
+                        app.dashboard_canvas.yview_moveto(0)
                 finally:
                     app.quit()
 

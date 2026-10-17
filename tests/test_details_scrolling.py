@@ -10,7 +10,9 @@ from ai_telemetry import PerformancePanel
 
 class DetailsScrollingTests(unittest.TestCase):
  def setUp(self):
-  self.root=tk.Tk();self.root.geometry('1000x1050')
+  self.root=tk.Tk()
+  # Keep the standalone table mapped on hosted desktops with a short work area.
+  self.root.maxsize(10000,10000);self.root.geometry('1000x1050')
   self.panel=PerformancePanel(self.root);self.panel.pack(fill='both',expand=True)
   self.groups=[{'title':'Engine settings','rows':[{'label':f'Setting {i}','value':'A very long value '+('setting '*30),'source':'Reported'} for i in range(70)]}]
   self.panel.update_engine_details(self.groups)
