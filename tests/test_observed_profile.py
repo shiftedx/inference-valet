@@ -9,6 +9,7 @@ class ObservedProfile(unittest.TestCase):
    root=pathlib.Path(d);(root/'profile-logs').mkdir()
    (root/'profile-logs/active-profile.json').write_text(json.dumps(dict(server_pid=42,server_started=100,profile='quality-iq3-xxs')))
    process=Mock(pid=42);process.create_time.return_value=100
+   process.net_connections.return_value=[Mock(status=a.psutil.CONN_LISTEN,laddr=Mock(ip='127.0.0.1',port=8080))]
    def fetch(path):return {'data':[{'id':'qwen3.8-flash-next-iq3_xxs'}]} if path=='/v1/models' else {'loaded':True,'context':{'native':131072},'concurrency':{'serving':1}}
    with patch.object(a,'STRATA',root),patch.object(a,'servers',return_value=[(process,'strata-server')]),patch.object(a,'read_demand_status',return_value={}),patch.object(a,'fetch',side_effect=fetch):
     key,status=a.observed_profile()

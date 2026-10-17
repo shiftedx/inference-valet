@@ -44,7 +44,7 @@ class ProfileTests(unittest.TestCase):
     def test_validation_rejects_bad_values_without_writing(self):
         values,snapshot=self.store.load(self.key);before=[p.read_bytes() for p in (self.path,self.shared)]
         for field,value in [('name',''),('context','nan'),('slots','5'),('context','1024'),
-                            ('max_tokens','200000'),('reasoning','-1'),('workers','0'),
+                            ('max_tokens','200000'),('reasoning','-1'),('workers','-1'),
                             ('resident','NaN'),('pcie','1.1'),('kv','invented'),('effort','xhigh')]:
             with self.subTest(field=field,value=value):
                 with self.assertRaises(ValueError):self.store.save(self.key,dict(values,**{field:value}),snapshot)

@@ -19,10 +19,13 @@ def argument(args, flag, default=''):
     return args[args.index(flag)+1] if flag in args else default
 
 def set_argument(args, flag, value):
-    if flag in args:
-        args[args.index(flag)+1] = str(value)
-    else:
-        args.extend((flag, str(value)))
+    """Replace the complete override; None restores the backend default."""
+    positions = [index for index, item in enumerate(args) if item == flag]
+    insert = positions[0] if positions else len(args)
+    for index in reversed(positions):
+        del args[index:index+2]
+    if value is not None:
+        args[insert:insert] = [flag, str(value)]
 
 def fingerprint(path):
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
@@ -45,11 +48,25 @@ TUNING = {
     'resident': ('--resident-budget-gib', float, 0, 1024, 'Resident RAM budget'),
     'kv_resident': ('--kv-resident', int, 0, 1048576, 'Resident KV tokens'),
     'reserve': ('--vram-reserve-mib', int, 0, 1048576, 'VRAM reserve'),
-    'workers': ('--pool-workers', int, 1, 1024, 'CPU workers'),
-    'spec': ('--spec', int, 0, 8, 'Draft tokens'),
+    'workers': ('--pool-workers', int, 0, 1024, 'CPU workers'),
+    'spec': ('--spec', int, 2, 8, 'Draft tokens'),
     'spec_min': ('--spec-min-p', float, 0, 1, 'Draft minimum probability'),
     'pcie': ('--pcie-frac', float, 0, 1, 'PCIe fraction'),
+    'expert_cache': ('--expert-cache', int, 0, 2147483647, 'GPU expert slots'),
 }
+
+EDITABLE_FLAGS = {'--max-context', '--kv', '--ple-io', *(spec[0] for spec in TUNING.values())}
+
+def validate_arguments(args):
+    """Reject ambiguous imports rather than silently editing the wrong override."""
+    if not isinstance(args, list) or any(not isinstance(item, str) for item in args):
+        raise ValueError('Profile arguments must be a list of strings.')
+    for flag in EDITABLE_FLAGS:
+        positions = [index for index, item in enumerate(args) if item == flag]
+        if len(positions)>1:
+            raise ValueError(f'Profile contains duplicate {flag} overrides. Resolve them before editing.')
+        if positions and (positions[0]+1>=len(args) or args[positions[0]+1].startswith('--')):
+            raise ValueError(f'Profile {flag} is missing its value.')
 
 class ProfileStore:
     def __init__(self, root, state):
@@ -89,18 +106,21 @@ class ProfileStore:
         paths = self.paths(key)
         data = read_object(paths[0]);shared = read_object(paths[1], {});names = read_object(paths[2], {})
         args = data['args']
+        validate_arguments(args)
         values = dict(name=names.get(key, 'Strata'), context=argument(args, '--max-context'),
                       slots=str(data.get('parallel', 1)), kv=argument(args, '--kv'),
                       max_tokens=str(shared.get('max_tokens', data.get('max_tokens', ''))),
                       reasoning=str(shared.get('reasoning_budget_tokens', data.get('reasoning_budget_tokens', 0))),
                       effort=shared.get('reasoning_effort', data.get('reasoning_effort', 'high')))
         values.update({key:argument(args, spec[0]) for key, spec in TUNING.items()})
+        values['ple_io'] = argument(args, '--ple-io')
         snapshot = dict(data=data, shared=shared, names=names, hashes=[fingerprint(path) for path in paths])
         return values, snapshot
 
     @staticmethod
     def prepare(snapshot, values):
         data = copy.deepcopy(snapshot['data']);shared = copy.deepcopy(snapshot['shared'])
+        validate_arguments(data['args'])
         name = values['name'].strip()
         if not name or len(name)>64 or any(ord(char)<32 for char in name):
             raise ValueError('Profile name must contain 1–64 printable characters.')
@@ -130,20 +150,37 @@ class ProfileStore:
             shared.pop('max_tokens', None);data.pop('max_tokens', None)
         set_argument(data['args'], '--max-context', context)
         if values['kv']:set_argument(data['args'], '--kv', values['kv'])
+        if 'ple_io' in values:
+            placement = str(values['ple_io']).strip()
+            if placement not in ('', 'direct', 'mmap', 'ram'):
+                raise ValueError('Engram placement must be backend default, direct, mmap, or ram.')
+            if placement != argument(data['args'], '--ple-io'):
+                set_argument(data['args'], '--ple-io', placement or None)
         for key, (flag, kind, low, high, label) in TUNING.items():
+            if key not in values:continue
             raw = str(values[key]).strip()
-            if not raw:continue
+            if not raw:
+                if key in ('prefill', 'spec') and flag in data['args']:
+                    raise ValueError(f'{label} is required for serving; keep a supported value.')
+                set_argument(data['args'], flag, None);continue
             # Strata's adaptive prompt batching uses the literal "auto".
             if key=='prefill' and raw in ('auto','auto:8192','auto:16384','auto:32768'):
+                set_argument(data['args'], flag, raw);continue
+            if key=='expert_cache' and raw=='auto':
                 set_argument(data['args'], flag, raw);continue
             try:
                 value = kind(raw)
                 if kind is int and not raw.isdecimal():raise ValueError()
                 if not math.isfinite(value) or not low<=value<=high:raise ValueError()
+                if key=='resident' and value<=0:raise ValueError()
             except (ValueError, TypeError, OverflowError):
+                if key=='resident':raise ValueError('Resident RAM budget must be greater than 0 and at most 1024 GiB.')
                 raise ValueError(f'{label} must be between {low:g} and {high:g}.')
-            set_argument(data['args'], flag, value)
+            # Preserve valid imported formatting and unexposed arguments on a no-op save.
+            if raw != argument(data['args'], flag):
+                set_argument(data['args'], flag, value)
         resident = int(argument(data['args'], '--kv-resident', 0))
+        if 0<resident<20480:raise ValueError('Resident KV tokens must be 0 or at least 20,480 (Strata minimum).')
         if resident>context:raise ValueError('Resident KV tokens cannot exceed context per agent.')
         return name, data, shared
 

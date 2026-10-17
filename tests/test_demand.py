@@ -100,6 +100,28 @@ class NativeHTTPTests(unittest.TestCase):
         self.assertEqual(self.post(self.svc.model)[0],200)
         self.assertEqual(self.engine.starts,2)
 
+    def test_staged_settings_hook_runs_only_before_unloaded_native_load(self):
+        calls=[]
+        def apply(service, root):
+            self.assertIs(service,self.svc)
+            self.assertTrue(service.fifo.locked())
+            self.assertFalse(service.loaded())
+            calls.append(True)
+        with patch('ai_next_load.apply_pending_memory',side_effect=apply):
+            self.assertEqual(self.post(self.svc.model)[0],200)
+            self.assertEqual(self.post(self.svc.model)[0],200)
+            self.assertEqual(len(calls),1)
+            self.svc.unload()
+            self.assertEqual(self.post(self.svc.model)[0],200)
+            self.assertEqual(len(calls),2)
+
+    def test_invalid_pending_settings_do_not_start_the_engine(self):
+        with patch('ai_next_load.apply_pending_memory',side_effect=ValueError('Invalid saved Engram placement')):
+            code,body=self.post(self.svc.model)
+        self.assertEqual(code,503)
+        self.assertIn('Invalid saved Engram placement',body)
+        self.assertEqual(self.engine.starts,0)
+
     def test_wrong_model_never_loads(self):
         self.assertEqual(self.post('wrong-model')[0],404)
         self.assertEqual(self.engine.starts,0)

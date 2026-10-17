@@ -34,7 +34,7 @@ class EditorTests(unittest.TestCase):
                         try:
                             app.edit_profile();editor=app.profile_editor
                             app.edit_profile();self.assertIs(app.profile_editor,editor)
-                            for page in ('Profile','Engine'):
+                            for page in ('Profile','Memory','Engine'):
                                 editor.select_page(page);app.window.update()
                                 top=editor.window.winfo_rooty();bottom=top+editor.window.winfo_height()
                                 for widget in (editor.save_button,*editor.fields.values()):

@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 ROOT=pathlib.Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
-from ai_telemetry import Collector,PerformancePanel,THEME
+from ai_telemetry import Collector,PerformancePanel,THEME,strata_listener
 from ai_widgets import Surface,Button,Switch,ProfileSelect,ui_font
 from ai_idle import Settings,IdlePolicy,GameDetector,idle_seconds,IDLE_MINUTES
 from ai_recovery import RecoveryPolicy,listener_present
@@ -245,10 +245,13 @@ def read_demand_status():
 def observed_profile():
  """Read-only status; refreshing never loads or unloads a model."""
  try:
-  model=fetch('/v1/models')['data'][0]['id']
   owned=servers()
-  if not any(kind=='strata-server' for _,kind in owned):return None,'No model loaded.'
+  listener=strata_listener(owned)
+  if listener is None:return None,'API unavailable: listener ownership could not be verified' if owned else 'No model loaded.'
+  model=fetch('/v1/models')['data'][0]['id']
   s=fetch('/v1/status');demand=read_demand_status()
+  if not listener.is_running() or strata_listener([(listener,'strata-server')]) is None:return None,'API unavailable: listener changed during status check'
+  if demand.get('owner_pid')!=listener.pid:demand={}
   if demand.get('games') or demand.get('unknown') or demand.get('load_issue'):return None,demand['reason']
   if not s.get('loaded'):return None,demand.get('reason','Waiting for request')
   context=s['context']['native'];slots=s['concurrency']['serving']
@@ -307,9 +310,9 @@ class LauncherUI:
   self.delay_var=tk.StringVar(value=f"{IDLE_SETTINGS.read()['idle_minutes']} min")
   style=ttk.Style(self.window);style.theme_use('clam')
   style.configure('Vertical.TScrollbar',background=THEME['line'],troughcolor=THEME['bg'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],arrowcolor=THEME['muted'])
-  style.map('Vertical.TScrollbar',background=[('pressed',THEME['blue']),('active','#4a5260')])
+  style.map('Vertical.TScrollbar',background=[('pressed',THEME['accent']),('active',THEME['raised'])])
   self.window.option_add('*TCombobox*Listbox.background',THEME['card']);self.window.option_add('*TCombobox*Listbox.foreground',THEME['text'])
-  self.window.option_add('*TCombobox*Listbox.selectBackground',THEME['line']);self.window.option_add('*TCombobox*Listbox.selectForeground',THEME['text'])
+  self.window.option_add('*TCombobox*Listbox.selectBackground',THEME['selected']);self.window.option_add('*TCombobox*Listbox.selectForeground',THEME['text'])
   canvas=tk.Canvas(self.window,bg=THEME['bg'],highlightthickness=0)
   scrollbar=ttk.Scrollbar(self.window,orient='vertical',command=canvas.yview)
   canvas.configure(yscrollcommand=scrollbar.set)
@@ -345,7 +348,7 @@ class LauncherUI:
   self.start_button=Button(actions,text='Load model',primary=True,command=lambda:self.begin('start'));self.start_button.pack(side='left')
   self.stop_button=Button(actions,text='Unload model',command=lambda:self.begin('stop'));self.stop_button.pack(side='left',padx=(6,0))
   self.attention_row=tk.Frame(hero,bg=THEME['bg'])
-  self.state_dot=self._text(self.attention_row,'●','caption',color=THEME['amber']);self.state_dot.pack(side='left',padx=(0,5))
+  self.state_dot=self._text(self.attention_row,'●','caption',color=THEME['warning']);self.state_dot.pack(side='left',padx=(0,5))
   self.state_label=self._text(self.attention_row,variable=self.hero_state,size='caption',bold=True);self.state_label.pack(side='left',padx=(0,8))
   self.note_label=self._text(self.attention_row,variable=self.hero_note,size='caption',color=THEME['muted']);self.note_label.pack(side='left',fill='x',expand=True)
   self.model_divider=tk.Frame(hero,bg=THEME['line'],height=1);self.model_divider.pack(fill='x',pady=(10,8))
@@ -363,9 +366,10 @@ class LauncherUI:
   self._text(performance_header,'Performance','heading',True).pack(side='left')
   self._text(performance_header,'Activity · past minute','caption',color=THEME['muted']).pack(side='right')
   self.performance=PerformancePanel(frame) if not stop else None
-  self.collector=Collector(fetch,servers);self.latest_performance={}
+  self.collector=Collector(fetch,servers,read_demand_status);self.latest_performance={}
   if self.performance:
    self.performance.on_layout=fit_dashboard
+   self.performance.on_edit_engine=lambda:self.edit_profile(initial_page='Memory')
    self.performance.pack(fill='both',expand=True)
   def wrap_hero(event):
    self.note_label.configure(wraplength=max(180,event.width-self.state_label.winfo_reqwidth()-24))
@@ -402,14 +406,15 @@ class LauncherUI:
   self.window.update_idletasks()
   native_window_style(self.window)
   if hidden:self.hide()
- def edit_profile(self):
+ def edit_profile(self,initial_page='Profile'):
   from tkinter import messagebox
   from ai_profile_editor import ProfileEditor
   if self.profile_editor and self.profile_editor.window.winfo_exists():
+   self.profile_editor.select_page(initial_page)
    self.profile_editor.window.lift();self.profile_editor.window.focus_force();return
   if self.active:return
   key=self.keys[self.picker.current()]
-  try:self.profile_editor=ProfileEditor(self.window,PROFILE_STORE,key,self.save_profile,native_window_style)
+  try:self.profile_editor=ProfileEditor(self.window,PROFILE_STORE,key,self.save_profile,native_window_style,initial_page=initial_page)
   except (OSError,ValueError,KeyError) as exc:messagebox.showerror('Profile unavailable',str(exc),parent=self.window)
  def save_profile(self,key,values,snapshot):
   if self.active:raise RuntimeError('Wait for the current model action to finish, then save again.')
@@ -418,6 +423,7 @@ class LauncherUI:
   self.keys=list(PROFILES);self.picker.configure(values=[PROFILE_NAMES[k] for k in self.keys])
   if self.popup_picker:self.popup_picker.configure(values=[PROFILE_NAMES[k] for k in self.keys])
   self.selected.set(PROFILE_NAMES[key]);self.update_controls()
+  if self.performance:self.performance.engine_settings_note.set('Saved · changes apply on the next model load')
  def resize_details(self,expanded):
   self.window.update_idletasks()
   if not expanded:
@@ -438,8 +444,11 @@ class LauncherUI:
   if not user.GetMonitorInfoW(monitor,ctypes.byref(info)):return
   user.GetWindowRect(hwnd,ctypes.byref(rect))
   decoration=rect.bottom-rect.top-self.window.winfo_height()
-  height=min(self.window.winfo_height()+self.performance.detail_container.winfo_reqheight()+7,info.work.bottom-info.work.top-decoration)
-  y=max(info.work.top,min(rect.top,info.work.bottom-height-decoration))
+  # A work-area-filling foreground window can trigger Windows' presentation
+  # state, which the existing game guard correctly treats as a GPU blocker.
+  margin=round(16*self.ui_scale)
+  height=min(self.window.winfo_height()+self.performance.detail_container.winfo_reqheight()+7,info.work.bottom-info.work.top-decoration-2*margin)
+  y=max(info.work.top+margin,min(rect.top,info.work.bottom-margin-height-decoration))
   self.window.geometry(f'{self.window.winfo_width()}x{height}+{rect.left}+{y}')
   self.dashboard_canvas.yview_moveto(0)
  def _text(self,parent,text='',size='body',bold=False,color=None,variable=None,wrap=0):
@@ -455,7 +464,7 @@ class LauncherUI:
    self._reveal_focus(event.widget,canvas)
   def visit(widget):
    if widget in skip:return
-   if widget.winfo_class() not in ('TCombobox','TScrollbar','Scrollbar'):
+   if widget.winfo_class() not in ('TCombobox','TScrollbar','Scrollbar','Treeview'):
     widget.bind('<MouseWheel>',on_wheel,add='+')
    widget.bind('<FocusIn>',on_focus,add='+')
    for child in widget.winfo_children():visit(child)
@@ -609,6 +618,12 @@ class LauncherUI:
   if self.tray:
    self.tray.visible=False
    self.tray.stop()
+  # Release callbacks that point back to this UI while Tcl still belongs to the
+  # main thread; an in-flight worker may otherwise keep the whole UI alive.
+  for panel in (self.performance,self.popup_performance):
+   if panel:
+    panel.on_edit_engine=lambda:None;panel.on_layout=lambda:None;panel.on_details=lambda expanded:None
+  if self.profile_editor:self.profile_editor.on_save=lambda *args:None
   self.window.update_idletasks()
   self.window.destroy();return True
  def refresh_display(self):
@@ -645,12 +660,19 @@ class LauncherUI:
    remembered=IDLE_SETTINGS.read()['last_profile']
    profile='Last used: '+PROFILE_NAMES[remembered] if remembered in PROFILE_NAMES else ''
    note=explanation if remembered in PROFILE_NAMES else 'Choose a profile to load it.'
+  reading=self.latest_performance
+  activity=reading.get('activity') or {}
+  if activity and not self.active and not status.startswith('Action failed:'):
+   if time.monotonic()-reading.get('sampled',0)>15:
+    title='Status unavailable';note='Last reading is stale · checking again'
+   else:
+    title=activity['title'];note=activity.get('detail','')
   fallback='Choose a model' if title=='No model loaded' else 'Model unavailable' if title in ('Action failed','Strata needs attention','Status unavailable') else 'Local model'
   self.hero_state.set(title);self.hero_profile.set(profile or fallback);self.hero_note.set(note)
-  color=THEME['green'] if title in ('Ready','Model running') else THEME['amber'] if any(word in title.lower() for word in ('failed','attention','unavailable','priority')) else THEME['blue']
+  color=THEME['success'] if title in ('Ready','Model running') else THEME['warning'] if any(word in title.lower() for word in ('failed','attention','unavailable','priority')) else THEME['info']
   self.state_dot.configure(fg=color);self.state_label.configure(fg=color)
   if 'blocked:' in reason and title in ('Ready','Model running','No model loaded','Waiting for request'):
-   self.hero_state.set('Game priority');self.hero_note.set(reason.split('blocked:',1)[1].strip());color=THEME['amber'];self.state_label.configure(fg=color);self.state_dot.configure(fg=color);title='Game priority'
+   self.hero_state.set('Game priority');self.hero_note.set(reason.split('blocked:',1)[1].strip());color=THEME['warning'];self.state_label.configure(fg=color);self.state_dot.configure(fg=color);title='Game priority'
   if title in ('Ready','Model running','Checking model…','No model loaded','Waiting for request','Restore paused'):self.attention_row.pack_forget()
   else:self.attention_row.pack(fill='x',pady=(6,0),before=self.model_divider)
   if self.popup:self.popup_state.configure(fg=color)
@@ -665,7 +687,7 @@ class LauncherUI:
   if self.popup_start:
    self.popup_start.configure(text=load_label,state='disabled' if self.active else 'normal');self.popup_stop.configure(state='disabled' if 'stop' in self.active else 'normal');self.popup_picker.configure(state='disabled' if self.active else 'readonly')
   if self.tray:
-   reading=self.latest_performance;speed=reading.get('live_speed');extra=f" · {speed:.1f} tok/s" if isinstance(speed,(int,float)) else ''
+   reading=self.latest_performance;speed=reading.get('live_speed') if time.monotonic()-reading.get('sampled',0)<=15 else None;extra=f" · {speed:.1f} tok/s" if isinstance(speed,(int,float)) else ''
    self.tray.title=('Inference Valet · '+reading.get('state','')+extra+' · '+self.status.get())[:127];self.tray.update_menu()
  def begin(self,action,key=None,automatic=False,recovery=False):
   if action in self.active or (action=='start' and self.active):return
@@ -707,6 +729,7 @@ class LauncherUI:
    elif kind=='snapshot':
     self.refreshing=False
     if payload[0]==self.epoch:
+     self.reading_stale=False
      self.latest_performance=payload[2]
      if self.performance and self.window.state()!='withdrawn':self.performance.update(payload[2])
      if self.popup_performance and self.popup.state()!='withdrawn':self.popup_performance.update(payload[2])
@@ -735,6 +758,11 @@ class LauncherUI:
     elif not (payload[2] or {}).get('cancelled'):self.current=payload[1]
     self.update_controls()
     if self.stop_only and not self.active and self.quit():return
+  if self.latest_performance.get('activity') and time.monotonic()-self.latest_performance.get('sampled',0)>15 and not getattr(self,'reading_stale',False):
+   self.reading_stale=True
+   if self.performance:self.performance.mark_stale()
+   if self.popup_performance:self.popup_performance.mark_stale()
+   self.update_controls()
   visible=self.window.state()!='withdrawn' or (self.popup is not None and self.popup.state()!='withdrawn')
   self.poll_timer=self.window.after(100 if visible or self.active else 250,self.poll)
  def notify_issue(self,issue):
@@ -792,8 +820,10 @@ class LauncherUI:
   if not self.refreshing:
    self.refreshing=True;epoch=self.epoch
    def sample():
-    try:reading=self.collector.collect() if visible else {};profile=observed_profile()
-    except Exception:reading={'state':'telemetry unavailable · retrying','slots':[],'live_speed':None,'hardware':{}};profile=(None,'Telemetry unavailable; retrying.')
+    try:reading=self.collector.collect() if visible else self.collector.summary();profile=observed_profile()
+    except Exception:
+     reading={'sampled':time.monotonic(),'state':'telemetry unavailable · retrying','slots':[],'live_speed':None,'hardware':{},'activity':{'state':'unavailable','title':'Status unavailable','detail':'The observation failed · checking again','blockers':[],'recent':[]}}
+     profile=(None,'Telemetry unavailable; retrying.')
     self.events.put(('snapshot',(epoch,profile,reading)))
    self.telemetry_worker.submit(sample)
   self.refresh_timer=self.window.after(2000 if visible else 10000,self.refresh)

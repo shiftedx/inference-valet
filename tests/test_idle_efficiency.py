@@ -44,9 +44,10 @@ class EfficiencyTests(unittest.TestCase):
     def test_hidden_dashboard_does_not_collect_hardware_telemetry(self):
         app=a.LauncherUI(enable_tray=False,observe=False);app.hide()
         try:
-            with patch.object(app.collector,'collect') as collect,patch.object(a,'observed_profile',return_value=(None,'Waiting for request')),patch.object(app.telemetry_worker,'submit',side_effect=lambda target:target()):
+            with patch.object(app.collector,'collect') as collect,patch.object(app.collector,'summary',return_value={}) as summary,patch.object(a,'observed_profile',return_value=(None,'Waiting for request')),patch.object(app.telemetry_worker,'submit',side_effect=lambda target:target()):
                 app.refresh()
                 collect.assert_not_called()
+                summary.assert_called_once()
                 event=app.events.get_nowait()
                 self.assertEqual(event[0],'snapshot');self.assertEqual(event[1][2],{})
         finally:app.quit()

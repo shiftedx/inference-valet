@@ -11,5 +11,8 @@
   "enabled_profiles": [
     "strata-128k",
     "strata-3"
-  ]
+  ],
+  "activity": {
+    "comfyui_url": ""
+  }
 }

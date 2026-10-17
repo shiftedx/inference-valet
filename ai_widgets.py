@@ -1,19 +1,15 @@
 """Small, keyboard-accessible Tk surfaces shared by dashboard and tray."""
 import tkinter as tk
+import itertools
 from tkinter import ttk
 from tkinter import font as tkfont
 from PIL import Image, ImageDraw, ImageTk
 
-THEME = {'bg':'#17191b','card':'#222528','raised':'#2c3033',
-         'line':'#383e41','text':'#edece8','muted':'#a4abae',
-         'teal':'#a5c6af','violet':'#b0b7bd','amber':'#daba87',
-         'blue':'#9aaec4','green':'#a5c6af','primary':'#e5e4e0'}
+_FIELD_STYLES = itertools.count()
+
+from ai_theme import THEME, FONT_SIZES, ui_font
 
 CONTROL_HEIGHT = 34
-FONT_SIZES = {'caption':9, 'body':10, 'heading':12, 'metric':12}
-
-def ui_font(role='body',bold=False):
-    return ('Segoe UI',FONT_SIZES[role],'bold' if bold else 'normal')
 
 FIELD_FONT = ui_font()
 
@@ -58,8 +54,8 @@ class Surface(tk.Frame):
 
 class Button(tk.Button):
     """Native Button semantics with a rounded, scale-aware visual treatment."""
-    def __init__(self,parent,text,command,primary=False,quiet=False):
-        self.primary=primary;self.quiet=quiet;self.hover=False;self.focused=False
+    def __init__(self,parent,text,command,primary=False,quiet=False,selected=False):
+        self.primary=primary;self.quiet=quiet;self.selected=bool(selected);self.hover=False;self.focused=False
         self.ready=False;self.factor=scale(parent);self._appearance=None
         super().__init__(parent,text=text,command=command,font=ui_font(bold=primary),
                          compound='center',bg=parent.cget('bg'),activebackground=parent.cget('bg'),
@@ -75,6 +71,10 @@ class Button(tk.Button):
     def _change(self,flag,value):
         setattr(self,flag,value);self._paint()
 
+    def set_selected(self,selected):
+        """Keep persistent quiet-tab selection through hover and keyboard focus."""
+        self.selected=bool(selected);self._paint()
+
     def configure(self,cnf=None,**kw):
         result=super().configure(cnf,**kw)
         if self.ready and (cnf or any(key in kw for key in ('text','state'))):self._paint()
@@ -85,9 +85,19 @@ class Button(tk.Button):
     def _paint(self):
         disabled=self.cget('state')=='disabled'
         background=self.master.cget('bg')
-        fill=THEME['line'] if disabled else ('#f3f2ee' if self.hover else THEME['primary']) if self.primary else THEME['raised'] if self.hover else background if self.quiet else THEME['raised']
-        ink=THEME['muted'] if disabled else '#202322' if self.primary else THEME['text']
-        outline=THEME['blue'] if self.focused else fill if self.primary or self.quiet else THEME['line']
+        selected=self.selected and self.quiet and not self.primary
+        if disabled:
+            fill=THEME['raised'];ink=THEME['muted'];outline=THEME['line']
+        elif self.primary:
+            fill=THEME['primary_hover'] if self.hover else THEME['primary']
+            ink=THEME['on_primary'];outline=fill
+        elif selected:
+            fill=THEME['selected'];ink=THEME['text']
+            outline=THEME['primary_hover'] if self.hover else THEME['accent']
+        else:
+            fill=THEME['raised'] if self.hover or not self.quiet else background
+            ink=THEME['text'];outline=fill if self.quiet else THEME['line']
+        if self.focused:outline=THEME['focus']
         natural_width=tkfont.Font(font=self.cget('font')).measure(self.cget('text'))+round(30*self.factor)
         width=max(natural_width,self.winfo_width());height=control_height(self)
         appearance=(self.cget('text'),fill,ink,outline,width,height)
@@ -101,16 +111,19 @@ class TextField(ttk.Entry):
     """Inset text editing with the same rounded surface as profile selectors."""
     def __init__(self,parent,**kwargs):
         super().__init__(parent,**kwargs)
-        factor=scale(self);style=ttk.Style(self);name='ValetEntry'+str(id(self))
+        factor=scale(self);style=ttk.Style(self);name='ValetEntry'+str(next(_FIELD_STYLES))
         self._images=[rounded_image(self,round(40*factor),control_height(self),THEME['card'],color,round(8*factor))
-                      for color in (THEME['line'],THEME['blue'])]
+                      for color in (THEME['line'],THEME['focus'])]
         style.element_create(name+'.field','image',self._images[0],('focus',self._images[1]),
                              border=round(8*factor),sticky='nsew')
         style.layout(name+'.TEntry',[(name+'.field',{'sticky':'nsew','children':[
             ('Entry.padding',{'sticky':'nsew','children':[('Entry.textarea',{'sticky':'nsew'})]})]})])
         style.configure(name+'.TEntry',padding=(round(4*factor),0,round(4*factor),0),
                         foreground=THEME['text'],fieldbackground=THEME['card'],insertcolor=THEME['text'],
-                        selectbackground=THEME['line'],selectforeground=THEME['text'],font=FIELD_FONT)
+                        selectbackground=THEME['selected'],selectforeground=THEME['text'],font=FIELD_FONT)
+        style.map(name+'.TEntry',foreground=[('disabled',THEME['muted'])],
+                  selectbackground=[('!disabled',THEME['selected'])],
+                  selectforeground=[('!disabled',THEME['text'])])
         self.configure(style=name+'.TEntry',font=FIELD_FONT)
 
 class Switch(tk.Checkbutton):
@@ -122,9 +135,9 @@ class Switch(tk.Checkbutton):
             draw=ImageDraw.Draw(image);unit=factor*3
             box=lambda coords:tuple(round(value*unit) for value in coords)
             draw.rounded_rectangle(box((0,2,38,22)),radius=10*unit,
-                                   fill=THEME['green'] if on else THEME['line'])
+                                   fill=THEME['accent'] if on else THEME['line'])
             draw.ellipse(box((20 if on else 3,5,35 if on else 18,20)),
-                         fill='#202322' if on else THEME['muted'])
+                         fill=THEME['on_accent'] if on else THEME['muted'])
             images.append(ImageTk.PhotoImage(image.resize((round(52*factor),round(24*factor)),Image.Resampling.LANCZOS),master=parent))
         self.images=images
         super().__init__(parent,text=text,variable=variable,command=command,image=images[0],selectimage=images[1],
@@ -133,7 +146,7 @@ class Switch(tk.Checkbutton):
                          selectcolor=parent.cget('bg'),font=ui_font(),
                          bd=0,relief='flat',offrelief='flat',padx=0,pady=0,
                          highlightthickness=1,highlightbackground=parent.cget('bg'),
-                         highlightcolor=THEME['blue'],cursor='hand2',takefocus=True)
+                         highlightcolor=THEME['focus'],cursor='hand2',takefocus=True)
         self.bind('<Return>',lambda event:self.invoke())
 
 
@@ -142,11 +155,11 @@ class ProfileSelect(ttk.Combobox):
     def __init__(self,parent,**kwargs):
         super().__init__(parent,**kwargs)
         factor=scale(self);style=ttk.Style(self)
-        name='ValetSelect'+str(self.winfo_id())
+        name='ValetSelect'+str(next(_FIELD_STYLES))
         self._images=[]
         for fill,outline in ((THEME['card'],THEME['line']),
                              (THEME['card'],THEME['muted']),
-                             (THEME['card'],THEME['blue']),
+                             (THEME['card'],THEME['focus']),
                              (THEME['bg'],THEME['line'])):
             self._images.append(rounded_image(self,round(36*factor),control_height(self),fill,outline,round(8*factor)))
         arrows=[]
@@ -169,7 +182,7 @@ class ProfileSelect(ttk.Combobox):
                         foreground=THEME['text'],fieldbackground=THEME['card'],font=FIELD_FONT)
         style.map(name+'.TCombobox',foreground=[('disabled',THEME['muted']),('readonly',THEME['text'])],
                   fieldbackground=[('disabled',THEME['bg']),('readonly',THEME['card'])],
-                  selectbackground=[('readonly',THEME['card'])],selectforeground=[('readonly',THEME['text'])])
+                  selectbackground=[('readonly',THEME['selected'])],selectforeground=[('readonly',THEME['text'])])
         self.configure(style=name+'.TCombobox',cursor='hand2',font=FIELD_FONT)
         self.bind('<Return>',self._open,add='+')
         self.bind('<Enter>',lambda event:self.state(['active']),add='+')
@@ -180,7 +193,7 @@ class ProfileSelect(ttk.Combobox):
         style.configure('Valet.Popdown.TFrame',background=THEME['card'],relief='flat',borderwidth=0)
         self.tk.call(popup+'.f','configure','-style','Valet.Popdown.TFrame')
         self.tk.call(popup+'.f.l','configure','-font',FIELD_FONT,'-background',THEME['card'],
-                     '-foreground',THEME['text'],'-selectbackground',THEME['raised'],
+                     '-foreground',THEME['text'],'-selectbackground',THEME['selected'],
                      '-selectforeground',THEME['text'],'-activestyle','none',
                      '-selectborderwidth',0,'-borderwidth',round(11*factor),'-relief','flat','-highlightthickness',0)
         # Tk recalculates grid padding when posting. Use the listbox's own flat

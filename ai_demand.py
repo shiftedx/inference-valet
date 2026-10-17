@@ -8,7 +8,7 @@ import threading
 import time
 import urllib.request
 
-from ai_config import CONFIG, NVIDIA_SMI, STATE_DIR
+from ai_config import CONFIG, NVIDIA_SMI, STATE_DIR, STRATA_ROOT
 from ai_idle import GameDetector, Settings
 from ai_issues import record_issue, failure_code
 
@@ -144,7 +144,11 @@ def install(server, guard=None):
             if reason := guard.admission(): raise server.GpuBusy(reason, retry_after=15)
             if not svc.loaded() or svc._vision_down():
                 if reason := guard.load_reason(): raise server.GpuBusy(reason, retry_after=15)
-            try: native_ensure()
+            try:
+                if not svc.loaded():
+                    from ai_next_load import apply_pending_memory
+                    apply_pending_memory(svc, STRATA_ROOT)
+                native_ensure()
             except Exception as exc:
                 if reason := guard.admission(): raise server.GpuBusy(reason, retry_after=15) from None
                 guard.failed_load(exc)

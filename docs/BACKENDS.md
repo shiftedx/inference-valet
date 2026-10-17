@@ -10,6 +10,12 @@
 - Model ID: `qwen3.8-flash-next-iq3_xxs`.
 - HTTP: `/health`, `/v1/models`, `/v1/status`, `/metrics`; port `8080`.
 
+## Read-only activity
+
+- See [Activity semantics](ACTIVITY.md); verify Strata listener identity before attribution.
+- Configure `activity.comfyui_url` with a loopback ComfyUI base URL; observe `GET /queue` counts only.
+- Observation does not change `on_demand` admission policy or release retained ComfyUI models.
+
 ## Port new installations
 
 - Map installed profile names in `ai_profiles.PRESETS`; use the profile editor for tuning.

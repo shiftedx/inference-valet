@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/assets/icon.png" width="88" alt="Inference Valet"></p>
+<p align="center"><img src="docs/assets/logo.png" width="420" alt="Inference Valet"></p>
 
 <h1 align="center">Inference Valet</h1>
 
@@ -12,7 +12,7 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a5c6af" alt="MIT license"></a>
 </p>
 
-<p align="center"><a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a></p>
+<p align="center"><a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
 <p align="center"><img src="docs/assets/panel.png" width="940" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></p>
 
@@ -20,7 +20,7 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 |---|---|
 | Detect Steam games, Windows game records, configured executables and fullscreen/presentation activity. Block new loads; optional on-demand mode unloads after its game grace period. | Eager mode restores the last profile after **5–30 idle minutes**. Optional on-demand mode loads on the first request when games and resource guards permit. |
 | **Native controls** | **Performance at a glance** |
-| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Output, prompt speed, first-token latency, GPU/RAM, request activity and agent context. Flat charts; Technical details expands the window. |
+| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Backend-supported timing, GPU/RAM, request activity and agent context. Scrollable technical tables; validated engine settings apply on the next load. |
 
 <p align="center"><img src="docs/assets/lifecycle.svg" width="940" alt="Detected game pauses loading; game closes and PC becomes idle: restore; optional first-request loading"></p>
 

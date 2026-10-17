@@ -32,8 +32,8 @@ class WorkerTests(unittest.TestCase):
 
     def test_refresh_remains_single_flight_while_worker_is_blocked(self):
         entered=threading.Event();release=threading.Event();calls=[]
-        def observe():calls.append(1);entered.set();release.wait(3);return None,'Waiting for request'
-        with patch.object(a,'observed_profile',side_effect=observe):
+        def summary():calls.append(1);entered.set();release.wait(3);return {}
+        with patch.object(self.app.collector,'summary',side_effect=summary),patch.object(a,'observed_profile',return_value=(None,'Waiting for request')):
             try:
                 self.app.refresh();self.assertTrue(entered.wait(1));self.app.refresh()
                 self.assertEqual(len(calls),1)

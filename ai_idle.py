@@ -79,6 +79,63 @@ def idle_seconds():
 
 class GameDetector:
  def __init__(self):self.roots=[];self.recorded=set();self.refreshed=-1000
+ @staticmethod
+ def valet_process(proc):
+  # Match our actual interpreter and entry point, never a title or a shared
+  # python.exe name. Other Python applications can legitimately be games.
+  import sys
+  base=pathlib.Path(__file__).resolve().parent
+  interpreters={os.path.normcase(str(pathlib.Path(sys.executable).resolve()))}
+  interpreters.update(os.path.normcase(str(base/'.venv/Scripts'/name)) for name in ('python.exe','pythonw.exe'))
+  # Windows venv redirectors can expose the base interpreter as the real
+  # process image, even though the command was launched through pythonw.exe
+  # in our venv. Trust only that exact base installation, plus our entry point.
+  base_executable=getattr(sys,'_base_executable',None)
+  if base_executable:
+   executable=pathlib.Path(base_executable).resolve()
+   interpreters.update(os.path.normcase(str(executable.with_name(name))) for name in ('python.exe','pythonw.exe'))
+  try:
+   command=proc.cmdline()
+   if os.path.normcase(proc.exe()) not in interpreters or len(command)<2:return False
+   script=pathlib.Path(command[1])
+   if not script.is_absolute():script=pathlib.Path(proc.cwd())/script
+   return os.path.normcase(str(script.resolve()))==os.path.normcase(str(base/'ai-launcher.py'))
+  except (psutil.NoSuchProcess,psutil.AccessDenied,OSError):return False
+ @staticmethod
+ def foreground_fullscreen_process():
+  from ctypes import wintypes
+  class MonitorInfo(ctypes.Structure):
+   _fields_=[('cbSize',wintypes.DWORD),('rcMonitor',wintypes.RECT),('rcWork',wintypes.RECT),('dwFlags',wintypes.DWORD)]
+  user=ctypes.windll.user32
+  # Handles are pointer-sized; default ctypes integer returns truncate on x64.
+  user.GetForegroundWindow.restype=wintypes.HWND
+  user.GetWindowRect.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.RECT)]
+  user.GetWindowThreadProcessId.argtypes=[wintypes.HWND,ctypes.POINTER(wintypes.DWORD)]
+  user.MonitorFromWindow.argtypes=[wintypes.HWND,wintypes.DWORD]
+  user.MonitorFromWindow.restype=wintypes.HANDLE
+  user.GetMonitorInfoW.argtypes=[wintypes.HANDLE,ctypes.POINTER(MonitorInfo)]
+  window=user.GetForegroundWindow()
+  if not window:return None
+  rect=wintypes.RECT();monitor=MonitorInfo();monitor.cbSize=ctypes.sizeof(monitor)
+  if not user.GetWindowRect(window,ctypes.byref(rect)):return None
+  handle=user.MonitorFromWindow(window,2)
+  if not handle or not user.GetMonitorInfoW(handle,ctypes.byref(monitor)):return None
+  bounds=monitor.rcMonitor
+  if not (rect.left<=bounds.left and rect.top<=bounds.top and rect.right>=bounds.right and rect.bottom>=bounds.bottom):return None
+  pid=wintypes.DWORD()
+  if not user.GetWindowThreadProcessId(window,ctypes.byref(pid)) or not pid.value:return None
+  try:return psutil.Process(pid.value)
+  except psutil.NoSuchProcess:return None
+ def fullscreen_game(self,state):
+  # QUNS_BUSY (2) also describes ordinary apps, and PRESENTATION_MODE (4)
+  # describes a notification policy. Neither identifies a game. Only exclusive
+  # Direct3D (3), corroborated by a real fullscreen foreground window, adds a
+  # fallback for games outside our known executable paths.
+  if state!=3:return None
+  proc=self.foreground_fullscreen_process()
+  if proc is None or self.valet_process(proc):return None
+  try:return 'Exclusive fullscreen: '+proc.name()
+  except (psutil.NoSuchProcess,psutil.AccessDenied):return None
  def discover(self):
   roots=[];recorded=set()
   try:
@@ -124,9 +181,10 @@ class GameDetector:
     path=os.path.normcase(exe)
     if path in exact or any(path.startswith(root) for root in self.roots):found.append(proc.info['name'] or exe)
    except (psutil.NoSuchProcess,psutil.AccessDenied):continue
-  # This is an additional conservative guard, not the sole game detector.
+  # Known games above remain authoritative even when Valet has foreground focus.
   state=ctypes.c_int()
   hr=ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state))
   if hr!=0:raise OSError('Cannot check fullscreen activity')
-  if state.value in [2,3,4]:found.append('fullscreen / presentation app')
+  fullscreen=self.fullscreen_game(state.value)
+  if fullscreen:found.append(fullscreen)
   return sorted(set(found))

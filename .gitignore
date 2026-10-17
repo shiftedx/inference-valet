@@ -21,3 +21,6 @@ profile-logs/
 profile-backups/
 integration-backups/
 *.jsonl
+
+# Local deployment snapshots
+backups/

@@ -63,12 +63,12 @@ Reuse a known-working upstream configuration for model/runtime paths. Retain pro
 - On-demand mode (`enabled=true`): start an unloaded listener; the first request loads the engine after admission checks. Game grace defaults to 5 seconds; game-exit cooldown defaults to 30 seconds. Active games/unknown state/insufficient headroom return retryable errors.
 - Idle restore: 5/10/15/20/25/30 minutes, default 20. Eager mode reloads the profile; an on-demand listener stays unloaded until a request. Listener recovery is separate and never waits for the idle timer.
 - Manual Unload: disarm immediate listener recovery; optional idle restore still applies. To keep the model unloaded, turn Restore when idle off too.
-- Edit profile: adjust existing presets; Save creates backups and updates labels. Click Load/Switch model to apply. Creating arbitrary new preset names is not supported by this first editor.
+- Edit profile: adjust existing presets. Memory exposes engram placement, GPU expert slots, resident RAM budget and VRAM reserve; blank restores backend defaults. Save for next load validates and backs up edits. Active and pending settings remain distinct; the next model load applies them, including a compatible unloaded on-demand listener. Creating arbitrary preset names is not supported.
 
 ## Games / network / startup
 
 - Discover Steam install directories and Windows game records. Add other games to `<state_dir>/idle-settings.json`: `"extra_games": ["C:/Games/MyGame/game.exe"]`.
-- Fullscreen/presentation applications are conservatively treated as blockers. Unknown process/game inspection blocks loading; ordinary desktop input never unloads an already loaded model.
+- Known game executables remain authoritative. The fallback requires exclusive Direct3D state and a fullscreen foreground process; Valet is identified by its exact executable and script paths. Ordinary desktop busy/presentation states do not identify games. Unknown inspection blocks loading.
 - Preserve other GPU workloads. Defaults require ≥24,000 MiB free VRAM, ≤4,096 MiB used VRAM, ≥26 GiB available RAM and ≥35 GiB commit headroom. These are reference-profile admission thresholds; measure before changing them.
 - Loopback by default. To expose LAN, configure `on_demand.listen_host` intentionally and audit native authentication/firewall settings; Valet does not establish a secure public service.
 - `scripts/install-startup.ps1 -StartNow`: install one sign-in task for this checkout. Close hides to tray; right-click tray → Exit Valet stops monitoring and keeps the backend running.

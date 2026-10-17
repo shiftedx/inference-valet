@@ -41,7 +41,7 @@ Use isolated `AI_PROFILES_CONFIG` / `state_dir`, `on_demand.enabled=true` and al
 - Recovery every 10 seconds; at most three attempts per 10 minutes with persisted backoff. Never force recovery through an occupied port or kill a live peer application.
 - Reverify executable/script path and creation time immediately before stopping; retain graceful shutdown and authenticated GUI IPC.
 - Preserve legacy pipe `AI-Profiles`, state `AIProfiles`, task `AI Profiles - Idle Reload`.
-- Quiet Valet: graphite, flat/compact layout, shared `ui_font` / control sizes, equal grid columns, real data. Preserve keyboard input, DPI bounds and native window controls; verify 100/150/200%, resized forms and tray fallback.
+- Quiet Valet: follow [BRANDING.md](BRANDING.md); folded-V identity, aubergine surfaces, vermilion actions and parchment text; flat/compact layout, shared `ui_font` / control sizes, equal grid columns, real data. Preserve keyboard input, DPI bounds and native window controls; verify 100/150/200%, resized forms and tray fallback.
 - Profile saves preserve unexposed settings, reject stale snapshots and back up originals; apply only on a later profile launch. Save never hot-reloads a model.
 - Exclude configs, session/issue/log/state files, credentials, private hostnames/IPs, models, engines, venvs, profiling output and profile backups. Screenshots must reveal no private desktop content.
 - README: concise commands/tables, real visuals, quick links; move detail to `docs/`. No invented benchmarks or universal page-file multipliers.

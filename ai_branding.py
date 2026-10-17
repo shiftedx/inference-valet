@@ -1,11 +1,18 @@
-"""Inference Valet's returning-key mark, shared by Windows and documentation."""
+"""The folded-V identity, shared by Windows, the tray, and documentation."""
+import base64
 from pathlib import Path
 from PIL import Image, ImageDraw
+from ai_theme import THEME
 
-BACKGROUND = '#17191d'
-ACCENT = '#a9caff'
-INK = '#f4f6fa'
+BACKGROUND = THEME['bg']
+ACCENT = THEME['accent']
+INK = THEME['text']
 APP_ID = 'Household.InferenceValet.Desktop'
+ASSETS = Path(__file__).parent / 'docs' / 'assets'
+MASTERS = ASSETS / 'brand-held-token-20261017'
+ICON_MASTER = MASTERS / 'inference-valet-app-icon.png'
+LOGO_MASTER = MASTERS / 'inference-valet-logo-dark.png'
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
 def set_app_identity():
@@ -18,28 +25,55 @@ def set_app_identity():
         raise OSError('Cannot register Inference Valet app identity')
 
 
+def _ribbon(draw, commands, fill, scale):
+    """Flatten broad cubic paths at supersampled resolution for tiny tray sizes."""
+    points = []
+    current = None
+    for command in commands:
+        if command[0] == 'M' or command[0] == 'L':
+            current = command[1:]
+            points.append(current)
+        else:
+            x0, y0 = current
+            x1, y1, x2, y2, x3, y3 = command[1:]
+            for step in range(1, 25):
+                t = step / 24
+                u = 1 - t
+                points.append((u**3*x0 + 3*u*u*t*x1 + 3*u*t*t*x2 + t**3*x3,
+                               u**3*y0 + 3*u*u*t*y1 + 3*u*t*t*y2 + t**3*y3))
+            current = (x3, y3)
+    scaled = [(round(x*scale), round(y*scale)) for x, y in points]
+    draw.polygon(scaled, fill=fill)
+    # A thin aubergine edge holds the parchment shape on pale taskbars.
+    draw.line(scaled + scaled[:1], fill=BACKGROUND, width=scale, joint='curve')
+
+
 def icon_image(size=64, tray=False):
-    """Render a crisp mark at its actual display size; tray icons stay transparent."""
-    scale = 4
-    image = Image.new('RGBA', (96 * scale, 96 * scale))
-    draw = ImageDraw.Draw(image)
-    def box(values):
-        return tuple(round(value * scale) for value in values)
-    def line(points, fill=INK, width=8):
-        draw.line(box(points), fill=fill, width=width * scale, joint='curve')
+    """Use the approved app artwork; adapt its folded ribbons for tiny tray slots."""
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise ValueError('Icon size must be a positive integer')
     if not tray:
-        draw.rounded_rectangle(box((3, 3, 93, 93)), radius=22 * scale,
-                               fill=BACKGROUND, outline='#363a43', width=scale)
-        draw.arc(box((14, 14, 82, 82)), start=184, end=333,
-                 fill=ACCENT, width=5 * scale)
-        draw.polygon(box((81, 40, 69, 34, 80, 27)), fill=ACCENT)
-    # A generous bow and two short teeth survive the 16-pixel Windows tray.
-    draw.ellipse(box((22, 28, 46, 52)), outline=INK, width=7 * scale)
-    line((43, 49, 67, 73))
-    line((54, 60, 61, 53))
-    line((63, 69, 70, 62))
-    if tray:
-        image = image.crop(box((12, 20, 80, 88)))
+        with Image.open(ICON_MASTER) as master:
+            return master.convert('RGBA').resize((size, size), Image.Resampling.LANCZOS)
+    scale = 8
+    image = Image.new('RGBA', (96*scale, 96*scale))
+    draw = ImageDraw.Draw(image)
+    _ribbon(draw, [('M', 47, 58), ('L', 60, 51),
+        ('C', 64, 47, 66, 35, 70, 31), ('C', 72, 28, 79, 27, 86, 24),
+        ('C', 92, 21, 92, 26, 90, 31), ('L', 76, 69),
+        ('C', 75, 73, 72, 76, 69, 78), ('L', 53, 86)], INK, scale)
+    _ribbon(draw, [('M', 47, 58), ('L', 62, 54), ('L', 73, 69),
+        ('C', 76, 73, 74, 77, 69, 80), ('L', 53, 86)], '#EBD3B1', scale)
+    _ribbon(draw, [('M', 12, 16), ('L', 29, 16),
+        ('C', 33, 16, 35, 17, 37, 22), ('L', 48, 49),
+        ('C', 50, 54, 53, 56, 57, 59), ('L', 72, 69),
+        ('C', 78, 73, 76, 77, 71, 81), ('L', 59, 89),
+        ('C', 56, 91, 53, 91, 50, 89), ('L', 29, 73),
+        ('C', 25, 70, 23, 67, 21, 63), ('L', 6, 25),
+        ('C', 4, 20, 7, 16, 12, 16)], ACCENT, scale)
+    draw.rounded_rectangle((44*scale, 34*scale, 65*scale, 43*scale),
+        radius=4*scale, fill=INK, outline=BACKGROUND, width=scale)
+    # Broad, slightly enlarged geometry leaves enough transparent breathing room.
     return image.resize((size, size), Image.Resampling.LANCZOS)
 
 
@@ -115,22 +149,23 @@ def set_shortcut_app_id(path):
 
 
 def write_assets(directory):
-    """Rebuild checked-in assets from the same geometry used by the tray."""
+    """Deterministically rebuild public assets without touching approved masters."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    icon_image(96).save(directory / 'icon.png')
+    icon_image(512).save(directory / 'icon.png')
     icon_image(256).save(directory / 'inference-valet.ico',
-                         sizes=[(size, size) for size in (16, 24, 32, 48, 64, 128, 256)])
+                         sizes=[(size, size) for size in ICO_SIZES],
+                         append_images=[icon_image(size) for size in ICO_SIZES[:-1]])
     icon_image(32, tray=True).save(directory / 'tray-icon.png')
+    (directory / 'logo.png').write_bytes(LOGO_MASTER.read_bytes())
+    # Embed the exact approved artwork: portable SVG wrapper, no alternate mark.
+    encoded = base64.b64encode(ICON_MASTER.read_bytes()).decode('ascii')
     (directory / 'icon.svg').write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">'
-        '<rect x="3" y="3" width="90" height="90" rx="22" fill="#17191d" stroke="#363a43"/>'
-        '<path d="M14.2 43.3A34 34 0 0 1 78.3 32.6" fill="none" stroke="#a9caff" stroke-width="5"/>'
-        '<path d="M81 40L69 34L80 27Z" fill="#a9caff"/>'
-        '<g fill="none" stroke="#f4f6fa" stroke-width="8" stroke-linejoin="round">'
-        '<circle cx="34" cy="40" r="12" stroke-width="7"/>'
-        '<path d="M43 49L67 73M54 60L61 53M63 69L70 62"/></g></svg>', encoding='utf-8')
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">'
+        '<title>Inference Valet folded-V app icon</title>'
+        '<image width="512" height="512" href="data:image/png;base64,' + encoded + '"/></svg>',
+        encoding='utf-8')
 
 
 if __name__ == '__main__':
-    write_assets(Path(__file__).parent / 'docs' / 'assets')
+    write_assets(ASSETS)

@@ -1,0 +1,35 @@
+{
+  "concept": "The held token",
+  "generation_mode": "Built-in image_gen",
+  "palette": {
+    "vermilion": "#ED794D",
+    "parchment": "#FFF1D9",
+    "aubergine": "#26212F"
+  },
+  "assets": {
+    "inference-valet-app-icon.png": {
+      "width": 1254,
+      "height": 1254,
+      "mode": "RGBA",
+      "sha256": "30c355e590868b4837a1bba747820c428d916ca5601c9cd7ff85d01f93adb356"
+    },
+    "inference-valet-logo-dark.png": {
+      "width": 2172,
+      "height": 724,
+      "mode": "RGB",
+      "sha256": "02f5b40543b386a19de0e0c44de065cb2ce0062b9d163e364689d9e7cf0981cc"
+    }
+  },
+  "windows_ico_sizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256
+  ],
+  "icon_corners_transparent": true,
+  "logo_background": "Opaque aubergine",
+  "runtime_branding_replaced": true
+}

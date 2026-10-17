@@ -5,7 +5,7 @@ from ai_branding import apply_window_icon
 from ai_widgets import THEME, Button, ProfileSelect, TextField, scale, ui_font
 
 class ProfileEditor:
-    def __init__(self, parent, store, key, on_save, style_window):
+    def __init__(self, parent, store, key, on_save, style_window, initial_page='Profile'):
         self.store=store;self.key=key;self.on_save=on_save
         values,self.snapshot=store.load(key)
         self.window=tk.Toplevel(parent);self.window.title('Edit Strata profile')
@@ -18,15 +18,16 @@ class ProfileEditor:
         self.fields={};self.field_pages={};self.error=tk.StringVar(self.window,value='')
         body=tk.Frame(self.window,bg=THEME['bg']);body.pack(fill='both',expand=True,padx=round(22*self.factor),pady=round(18*self.factor))
         tk.Label(body,text='Profile settings',bg=THEME['bg'],fg=THEME['text'],font=ui_font('heading',True),anchor='w').pack(fill='x')
-        tk.Label(body,text='Save, then load this profile to apply.',bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x',pady=(4,12))
+        self.apply_note=tk.StringVar(self.window,value='Changes apply on the next model load.')
+        tk.Label(body,textvariable=self.apply_note,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x',pady=(4,12))
         tabs=tk.Frame(body,bg=THEME['bg']);tabs.pack(fill='x')
         self.pages={};self.tab_buttons={}
-        for name in ('Profile','Engine'):
+        for name in ('Profile','Memory','Engine'):
             button=Button(tabs,text=name,command=lambda name=name:self.select_page(name),quiet=True)
             button.pack(side='left',padx=(0,4));self.tab_buttons[name]=button
         tk.Frame(body,bg=THEME['line'],height=1).pack(fill='x',pady=(6,12))
         content=tk.Frame(body,bg=THEME['bg']);content.pack(fill='both',expand=True)
-        for name in ('Profile','Engine'):
+        for name in ('Profile','Memory','Engine'):
             self.pages[name]=tk.Frame(content,bg=THEME['bg'])
         self.pages['Profile'].columnconfigure(0,weight=1)
         self.pages['Profile'].columnconfigure(1,minsize=round(190*self.factor))
@@ -38,17 +39,25 @@ class ProfileEditor:
         self.field('Profile','effort','Reasoning effort',choices=('none','low','medium','high'))
         self.field('Profile','reasoning','Reasoning budget',hint='Tokens · 0 uses no fixed budget')
         self.field('Profile','kv','KV format',choices=tuple(dict.fromkeys(('int8','q4_0','k8v4','fp16',values['kv']))),hint='Memory / quality tradeoff')
+        self.field('Memory','ple_io','Engram / PLE placement',choices=('', 'direct', 'mmap', 'ram'),
+                   hint='Blank: engine default · direct / mmap: disk · ram: system RAM')
+        self.field('Memory','expert_cache','GPU expert cache',hint='Slots · auto: fit · 0: off · blank: engine default')
+        self.field('Memory','resident','Resident expert RAM budget',hint='GiB · greater than 0 · blank: engine default')
+        self.field('Memory','reserve','VRAM reserve',hint='MiB · blank: engine default')
+        self.field('Memory','kv_resident','Resident KV tokens',hint='Tokens per agent · blank: engine default')
+        tk.Label(self.pages['Memory'],text='RAM placement keeps the Engram table in system memory. Strata checks load headroom.',
+                 bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w',justify='left',
+                 wraplength=round(560*self.factor)).grid(row=3,column=0,columnspan=2,sticky='ew',pady=(round(8*self.factor),0))
         for key,label,hint in (
-            ('prefill','Prompt batch','Tokens · or auto'),('resident','Resident RAM budget','GiB'),
-            ('kv_resident','Resident KV tokens','Tokens per agent'),('reserve','VRAM reserve','MiB'),
-            ('workers','CPU workers','Threads'),('spec','Draft tokens','0 disables speculation'),
+            ('prefill','Prompt batch','Positive tokens or auto'),
+            ('workers','CPU workers','Threads · 0: automatic'),('spec','Draft tokens','2–8 tokens for serving'),
             ('spec_min','Draft minimum probability','0–1'),('pcie','PCIe fraction','0–1 · blank keeps the default')):
             self.field('Engine',key,label,hint=hint)
         # The footer stays outside the pages so validation and Save remain visible.
-        tk.Label(body,textvariable=self.error,bg=THEME['bg'],fg=THEME['amber'],font=ui_font('caption'),
+        tk.Label(body,textvariable=self.error,bg=THEME['bg'],fg=THEME['error'],font=ui_font('caption'),
                  wraplength=round(560*self.factor),anchor='w',justify='left').pack(fill='x',pady=(8,4))
         footer=tk.Frame(body,bg=THEME['bg']);footer.pack(fill='x')
-        self.save_button=Button(footer,text='Save profile',primary=True,command=self.save);self.save_button.pack(side='right')
+        self.save_button=Button(footer,text='Save for next load',primary=True,command=self.save);self.save_button.pack(side='right')
         Button(footer,text='Cancel',command=self.close,quiet=True).pack(side='right',padx=(0,8))
         self.select_page('Profile')
         self.window.update_idletasks()
@@ -60,13 +69,15 @@ class ProfileEditor:
         self.window.update_idletasks()
         x=parent.winfo_rootx()+(parent.winfo_width()-width)//2;y=parent.winfo_rooty()+round(32*self.factor)
         self.window.geometry(f'+{max(0,x)}+{max(0,min(y,parent.winfo_screenheight()-height-60))}')
-        style_window(self.window);self.window.lift();self.fields['name'].focus_set()
+        self.select_page(initial_page if initial_page in self.pages else 'Profile')
+        style_window(self.window);self.window.lift()
+        self.fields['ple_io' if self.page=='Memory' else 'prefill' if self.page=='Engine' else 'name'].focus_set()
 
     def field(self,page,key,label,choices=None,hint=''):
         frame=self.pages[page]
         index=sum(field==page for field in self.field_pages.values())
         self.field_pages[key]=page
-        if page=='Engine':
+        if page!='Profile':
             line=tk.Frame(frame,bg=THEME['bg'])
             half_gap=round(8*self.factor)
             line.grid(row=index//2,column=index%2,sticky='nsew',padx=(0,half_gap) if index%2==0 else (half_gap,0),pady=round(6*self.factor))
@@ -75,26 +86,31 @@ class ProfileEditor:
             line=frame
             frame.rowconfigure(index,minsize=round(44*self.factor),uniform='profile-rows')
         labels=tk.Frame(line,bg=THEME['bg']);self.field_labels[key]=labels
-        if page=='Engine':labels.pack(fill='x')
+        if page!='Profile':labels.pack(fill='x')
         else:labels.grid(row=index,column=0,sticky='w',padx=(0,round(16*self.factor)),pady=round(4*self.factor))
         tk.Label(labels,text=label,bg=THEME['bg'],fg=THEME['text'],font=ui_font('body'),anchor='w').pack(fill='x')
-        tk.Label(labels,text=hint,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x')
+        tk.Label(labels,text=hint,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w',justify='left',
+                 height=2 if page!='Profile' else 1,
+                 wraplength=round(260*self.factor) if page!='Profile' else 0).pack(fill='x')
         if choices:
             field=ProfileSelect(line,textvariable=self.vars[key],values=choices,state='readonly',width=16)
         else:
             field=TextField(line,textvariable=self.vars[key],width=16)
-        if page=='Engine':field.pack(fill='x',pady=(round(5*self.factor),0))
+        if page!='Profile':field.pack(fill='x',pady=(round(5*self.factor),0))
         else:field.grid(row=index,column=1,sticky='ew',pady=round(4*self.factor))
         self.fields[key]=field
 
     def select_page(self,name):
+        self.apply_note.set('Save, then load this profile to apply profile changes.' if name=='Profile' else 'Changes apply on the next model load.')
         for key,page in self.pages.items():
             page.pack_forget()
-            self.tab_buttons[key].configure(fg=THEME['text'] if key==name else THEME['muted'])
+            self.tab_buttons[key].set_selected(key==name)
         self.pages[name].pack(fill='both',expand=True)
         self.page=name
 
     def save(self):
+        if all(var.get()==self.original[key] for key,var in self.vars.items()):
+            self.window.destroy();return
         try:
             values={key:var.get() for key,var in self.vars.items()}
             self.store.prepare(self.snapshot,values)
