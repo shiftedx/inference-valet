@@ -383,6 +383,35 @@ class LayoutTests(unittest.TestCase):
         finally:
             app.quit()
 
+    def test_details_snapshot_precedes_pack_geometry_propagation_at_common_scales(self):
+        real_tk=tk.Tk
+        for factor in (1,1.5,2):
+            with self.subTest(scale=factor):
+                def scaled_root():
+                    root=real_tk();root.tk.call('tk','scaling',(96/72)*factor);return root
+                with patch.object(tk,'Tk',side_effect=scaled_root):
+                    app=launcher.LauncherUI(enable_tray=False,observe=False)
+                try:
+                    app.window.update();before=app.window.geometry()
+                    details=app.performance.detail_container;real_pack=details.pack
+                    def pack_with_geometry_propagation(**kwargs):
+                        real_pack(**kwargs)
+                        # Deterministically emulate a native layout requesting
+                        # extra width as soon as the disclosure is packed.
+                        app.window.geometry(f'{app.window.winfo_width()+10}x{app.window.winfo_height()}')
+                        app.window.update_idletasks()
+                    with patch.object(details,'pack',side_effect=pack_with_geometry_propagation):
+                        app.performance.toggle_details();app.window.update()
+                    self.assertEqual(app.details_geometry[0],before)
+                    app.performance.toggle_details();app.window.update()
+                    self.assertEqual(app.window.geometry(),before)
+                    # Toggling twice before idle must also restore this snapshot.
+                    app.performance.toggle_details();app.performance.toggle_details();app.window.update()
+                    self.assertFalse(app.performance.details_expanded)
+                    self.assertIsNone(app.details_geometry)
+                    self.assertEqual(app.window.geometry(),before)
+                finally:app.quit()
+
     def test_timing_trends_record_requests_once_and_reset(self):
         app = launcher.LauncherUI(enable_tray=False, observe=False)
         try:

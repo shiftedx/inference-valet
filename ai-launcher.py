@@ -437,13 +437,13 @@ class LauncherUI:
   self.selected.set(PROFILE_NAMES.get(key,'No profiles found'));self.update_controls()
   if self.performance:self.performance.engine_settings_note.set('Saved · changes apply on the next model load')
  def resize_details(self,expanded):
-  self.window.update_idletasks()
   if not expanded:
    if self.details_geometry:
     geometry,state=self.details_geometry;self.window.geometry(geometry)
     if state=='zoomed':self.window.state(state)
    self.details_geometry=None;return
   self.details_geometry=(self.window.geometry(),self.window.state())
+  self.window.update_idletasks()
   if self.window.state()=='zoomed':return
   import ctypes
   from ctypes import wintypes

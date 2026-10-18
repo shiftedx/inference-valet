@@ -553,13 +553,15 @@ class PerformancePanel:
  def toggle_details(self):
   if self.compact:return
   self.details_expanded=not self.details_expanded
+  # Snapshot/restore the owning window before packing details can propagate a
+  # new requested size. Dispatch synchronously so rapid toggles retain order.
+  self.on_details(self.details_expanded)
   if self.details_expanded:
    self.detail_container.pack(fill='x',pady=(7,0))
    self.details_button.configure(text='Request activity & details  ▴')
   else:
    self.detail_container.pack_forget()
    self.details_button.configure(text='Request activity & details  ▾')
-  self.frame.after_idle(lambda:self.on_details(self.details_expanded))
   self.frame.after_idle(self.on_layout)
 
  def _fit_activity_header(self):
