@@ -82,7 +82,7 @@ class PendingMemoryTests(unittest.TestCase):
         self.profile.write_text(json.dumps(self.template))
         before=self.profile.read_bytes()
         self.assertTrue(next_load.apply_pending_memory(self.svc,self.root))
-        next_load._verify_owner.assert_called_once_with(self.record,self.root)
+        next_load._verify_owner.assert_called_once_with(self.record,self.root.resolve())
         self.assertEqual(argument(self.svc.engine.spawn[1],'--expert-cache'),'123')
         self.assertEqual(self.profile.read_bytes(),before)
         self.assertEqual(json.loads(self.runtime.read_text())['parallel'],2)

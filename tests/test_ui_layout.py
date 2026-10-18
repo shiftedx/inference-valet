@@ -404,30 +404,45 @@ class LayoutTests(unittest.TestCase):
         for factor in (1,1.5,2):
             with self.subTest(scale=factor):
                 def scaled_root():
-                    root=real_tk();root.tk.call('tk','scaling',(96/72)*factor);return root
+                    root=real_tk();root.tk.call('tk','scaling',(96/72)*factor)
+                    # Exercise the constrained desktop used by hosted Windows CI.
+                    root.winfo_screenwidth=lambda:1024;root.winfo_screenheight=lambda:728
+                    return root
                 with patch.object(tk,'Tk',side_effect=scaled_root):app=launcher.LauncherUI(enable_tray=False,observe=False)
                 try:
                     app.current=app.keys[0];app.status.set('Running: model');app.window.update()
-                    # OS work-area fitting may move the whole window; only layout offsets matter.
-                    restore_y=app.auto_control.winfo_rooty()-app.window.winfo_rooty()
+                    # Measure the row within the hero. The switch may center as
+                    # status wraps, and the dashboard viewport/window may move.
+                    restore_row=app.auto_control.master
+                    restore_y=restore_row.winfo_y()
+                    def visible_status_labels(parent,title):
+                        count=0
+                        for widget in parent.winfo_children():
+                            if isinstance(widget,tk.Label) and widget.winfo_ismapped():
+                                variable=widget.cget('textvariable')
+                                text=str(widget.getvar(variable)) if variable else str(widget.cget('text'))
+                                count+=text in (title,'Strata · '+title)
+                            count+=visible_status_labels(widget,title)
+                        return count
                     for state,title in (('reading','Reading prompt'),('generating','Generating'),('busy','Working'),('unloaded','Unloaded')):
                         reading={'sampled':time.monotonic(),'activity':{'state':state,'title':title,'detail':'Backend detail'}}
                         app.latest_performance=reading;app.performance.update(reading);app.update_controls();app.window.update()
                         self.assertEqual(app.performance.activity_title.get(),'Strata · '+title)
                         self.assertTrue(app.performance.activity_header.winfo_ismapped())
-                        self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
+                        self.assertEqual(visible_status_labels(restore_row.master,title),1)
+                        self.assertEqual(restore_row.winfo_y(),restore_y)
                     app.latest_performance={};app.current=None;app.status.set('Waiting for request')
                     app.auto_status.set('Auto reload blocked: game.exe');app.update_controls();app.window.update()
                     self.assertIn('Game priority',app.performance.activity_title.get())
                     self.assertIn('game.exe',app.performance.activity_note.get())
-                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
+                    self.assertEqual(restore_row.winfo_y(),restore_y)
                     app.auto_status.set('');app.status.set('Action failed: Not enough GPU memory');app.update_controls();app.window.update()
                     self.assertIn('Action failed',app.performance.activity_title.get())
                     self.assertIn('GPU memory',app.performance.activity_note.get())
-                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
+                    self.assertEqual(restore_row.winfo_y(),restore_y)
                     app.active.add('start');app.status.set('Preparing profile');app.update_controls();app.window.update()
                     self.assertIn('Loading model',app.performance.activity_title.get())
-                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
+                    self.assertEqual(restore_row.winfo_y(),restore_y)
                     app.active.clear()
                 finally:app.quit()
 
