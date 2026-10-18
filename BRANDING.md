@@ -78,7 +78,7 @@ Use matching `chart_*_fill` tokens for subdued areas: output `#41303B`, GPU `#2F
 - Use the full mark for title/app surfaces at 20 px and larger. At Windows tray sizes use the simplified high-contrast ribbon/token adaptation, rendered at the actual target size; retain the aubergine keyline for legibility on light and dark taskbars.
 - Use the wordmark only where its full text remains readable. In compact controls use the icon plus ordinary accessible product text instead. Keep descriptive alt text in documentation.
 - Show the product name and icon once per surface. The dashboard uses its native title bar; its content header identifies the model profile. The borderless tray keeps its own branded header.
-- Windows system menus follow the operating-system theme; preserve their native behavior rather than replacing them just to recolor them.
+- Valet's tray context menu uses shared colors, fonts and buttons; retain profile selection, checked/disabled states, keyboard navigation, Escape and outside-click dismissal. Native Windows title-bar menus retain operating-system styling.
 - Native tray geometry is a deliberate small-size adaptation. `icon.svg` preserves the approved raster artwork in a portable wrapper; it is not an independently editable vector master.
 
 ## Accessibility and review

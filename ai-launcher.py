@@ -241,6 +241,18 @@ def tray_menu(send,busy,current,auto_enabled=lambda:False):
  profiles=[profile_item(k,p) for k,p in PROFILES.items()]
  return pystray.Menu(item('Open dashboard',lambda icon,entry:send('show'),default=True),item('Load model',pystray.Menu(*profiles),enabled=lambda entry:bool(PROFILES) and not busy()),item('Unload model',lambda icon,entry:send('stop')),item('Restore when idle',lambda icon,entry:send('auto-toggle'),checked=lambda entry:auto_enabled()),pystray.Menu.SEPARATOR,item('Exit Valet (keep model running)',lambda icon,entry:send('quit'),enabled=lambda entry:not busy()))
 
+def tray_context_items(send,busy,current,auto_enabled):
+ from ai_tray_menu import MenuItem
+ def profiles():
+  return [MenuItem(PROFILE_NAMES[key],lambda key=key:send('start',key),
+                   enabled=lambda:not busy(),checked=lambda key=key:current()==key)
+          for key in PROFILES]
+ return [MenuItem('Open dashboard',lambda:send('show')),
+         MenuItem('Load model',enabled=lambda:bool(PROFILES) and not busy(),children=profiles),
+         MenuItem('Unload model',lambda:send('stop')),
+         MenuItem('Restore when idle',lambda:send('auto-toggle'),checked=auto_enabled),None,
+         MenuItem('Exit Valet',lambda:send('quit'),enabled=lambda:not busy(),tooltip='Keeps the model running.')]
+
 def read_demand_status():
  """Accept status only from a fresh, verified current server identity."""
  try:
@@ -318,6 +330,7 @@ class LauncherUI:
   self.status=tk.StringVar(value='Checking model…');self.hero_state=tk.StringVar(value='Checking model…')
   self.hero_profile=tk.StringVar(value='');self.hero_note=tk.StringVar(value='')
   self.popup=None;self.popup_performance=None;self.popup_start=None;self.popup_stop=None;self.popup_picker=None
+  self.tray_context=None
   self.profile_editor=None
   self.keys=list(PROFILES);self.selected=tk.StringVar(value=PROFILE_NAMES[self.keys[0]] if self.keys else 'No profiles found')
   self.auto_var=tk.BooleanVar(value=self.auto_enabled)
@@ -395,11 +408,11 @@ class LauncherUI:
    events=self.events
    class VisualTrayIcon(pystray.Icon):
     def _on_notify(icon,wparam,lparam):
-     if lparam==0x202:
+     if lparam in (0x202,0x205):
       import ctypes
       from ctypes import wintypes
       point=wintypes.POINT();ctypes.windll.user32.GetPhysicalCursorPos(ctypes.byref(point))
-      events.put(('popup',(point.x,point.y)))
+      events.put(('popup' if lparam==0x202 else 'context',(point.x,point.y)))
      else:super()._on_notify(wparam,lparam)
    self.tray=VisualTrayIcon('Inference Valet',image,'Inference Valet',tray_menu(lambda action,key=None:self.events.put((action,key)),lambda:bool(self.active),lambda:self.current,lambda:self.auto_enabled))
    threading.Thread(target=self.tray.run,daemon=True).start()
@@ -507,7 +520,17 @@ class LauncherUI:
   if self.observe:self.refresh()
  def hide_popup(self):
   if self.popup:self.popup.withdraw()
+  if self.tray_context:self.tray_context.hide()
+ def show_context(self,anchor):
+  from ai_tray_menu import TrayContextMenu
+  self.hide_popup()
+  if self.tray_context is None:
+   self.tray_context=TrayContextMenu(self.window,lambda:tray_context_items(
+       lambda action,key=None:self.events.put((action,key)),lambda:bool(self.active),
+       lambda:self.current,lambda:self.auto_enabled))
+  self.tray_context.show(anchor)
  def show_popup(self,anchor=None):
+  if self.tray_context:self.tray_context.hide()
   import tkinter as tk
   from tkinter import ttk
   from PIL import ImageTk
@@ -635,6 +658,7 @@ class LauncherUI:
    if previous:user.SetThreadDpiAwarenessContext(previous)
  def quit(self):
   if self.active:return False
+  if self.tray_context:self.tray_context.hide()
   self.closing=True
   self.telemetry_worker.shutdown(wait=False,cancel_futures=True)
   self.policy_worker.shutdown(wait=False,cancel_futures=True)
@@ -727,6 +751,7 @@ class LauncherUI:
    if explanation and self.auto_enabled:self.popup_auto_note.pack(fill='x',before=self.popup_restore_divider,pady=(round(4*self.ui_scale),0))
    else:self.popup_auto_note.pack_forget()
  def update_controls(self):
+  if self.tray_context and self.tray_context.window.state()!='withdrawn':self.tray_context.refresh()
   self.refresh_display()
   load_label='Switch model' if self.current or self.status.get().startswith('Running: ') or 'start' in self.active else 'Load model'
   self.start_button.configure(text=load_label)
@@ -775,6 +800,7 @@ class LauncherUI:
     elif payload['due'] and not self.active:self.begin('start',payload['profile'],automatic=True)
    elif kind=='show':self.show()
    elif kind=='popup':self.show_popup(payload)
+   elif kind=='context':self.show_context(payload)
    elif kind=='quit':
     if self.quit():return
    elif kind=='status':self.status.set(payload);self.update_controls()

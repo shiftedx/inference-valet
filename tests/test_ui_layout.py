@@ -36,14 +36,17 @@ class LayoutTests(unittest.TestCase):
                 self.assertFalse(load.enabled)
             finally:app.quit()
 
-    def test_right_click_keeps_native_tray_menu_and_left_click_opens_flyout(self):
+    def test_right_click_opens_themed_menu_and_left_click_opens_flyout(self):
         import pystray
         with patch.object(pystray.Icon, 'run'), patch.object(pystray.Icon, 'stop'), \
              patch.object(pystray.Icon, '_on_notify') as native_menu:
             app = launcher.LauncherUI(enable_tray=True, observe=False)
             try:
                 app.tray._on_notify(0, 0x205)
-                native_menu.assert_called_once_with(0, 0x205)
+                kind, anchor = app.events.get_nowait()
+                self.assertEqual(kind, 'context')
+                self.assertEqual(len(anchor), 2)
+                native_menu.assert_not_called()
                 app.tray._on_notify(0, 0x202)
                 kind, anchor = app.events.get_nowait()
                 self.assertEqual(kind, 'popup')
