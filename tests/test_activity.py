@@ -9,6 +9,13 @@ import ai_activity as activity
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_observed_count_includes_rows_beyond_display_limit(self):
+        result = self.snapshot(processes={'available': True, 'processes': [{'pid': p} for p in range(14)]})
+        self.assertEqual(result['gpu_process_count'], 14)
+        self.assertEqual(len(result['gpu_processes']), 8)
+        unknown = self.snapshot(processes={'available': False, 'processes': []})
+        self.assertIsNone(unknown['gpu_process_count'])
+
     def snapshot(self, **kwargs):
         args = dict(status={'loaded': True, 'activity': {'in_flight': 0}},
                     metrics={'live': {'state': 'idle', 'running': 0, 'queued': 0}},

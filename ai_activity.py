@@ -218,5 +218,7 @@ def build_activity(status, metrics, demand, hardware, processes, owned,
     else:
         state, title, detail = 'busy', 'Loaded', 'Request activity is not available'
     return dict(state=state, title=title, detail=detail, blockers=blockers,
-                gpu_note=gpu_note, gpu_processes=gpu_processes, recent=recent, running=running, queued=queued,
+                gpu_note=gpu_note, gpu_processes=gpu_processes,
+                gpu_process_count=len(observed) if gpu_data.get('available') else None,
+                recent=recent, running=running, queued=queued,
                 in_flight=in_flight)

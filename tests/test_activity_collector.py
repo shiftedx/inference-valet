@@ -27,7 +27,7 @@ class ActivityCollectorTests(unittest.TestCase):
             '/health': {'status': 'ok'}, '/metrics': self.metrics,
             '/v1/status': self.status}[path])
         self.collector = telemetry.Collector(self.fetch, lambda: self.processes,
-                                            lambda: {'owner_pid': 123, 'owner_created': 100.0})
+                                            lambda: {'owner_pid': 123, 'owner_created': 100.0},gpu_probe=lambda:{})
         self.host = self.enter(patch.object(telemetry, 'host_hardware', return_value={}))
         self.driver = self.enter(patch.object(telemetry.subprocess, 'run', return_value=SimpleNamespace(
             returncode=0, stdout='0, 100, 32768, 40, 20')))
@@ -85,6 +85,7 @@ class ActivityCollectorTests(unittest.TestCase):
                 self.assertEqual(result['activity']['state'], 'unavailable')
 
     def test_partial_status_failure_clears_live_phase_and_speed(self):
+        self.collector.gpu_probe=lambda:{'gpu_power':400}
         def fetch(path):
             if path == '/v1/status':
                 raise OSError('listener unavailable')
@@ -94,6 +95,7 @@ class ActivityCollectorTests(unittest.TestCase):
         self.assertEqual(result['activity']['state'], 'unavailable')
         self.assertIsNone(result['live_speed'])
         self.assertIsNone(result['prefill_speed'])
+        self.assertEqual(result['power_stats']['samples'],0)
         self.assertEqual(result['slots'], [])
 
     def test_unloaded_status_overrides_older_generating_metrics(self):
@@ -120,6 +122,41 @@ class ActivityCollectorTests(unittest.TestCase):
         self.gpu.assert_not_called()
         self.comfy.assert_called_once()
         self.assertEqual(result['activity']['state'], 'generating')
+
+    def test_tuning_and_active_average_work_in_hidden_summary_without_process_probes(self):
+        self.collector.gpu_probe=Mock(return_value={'gpu_power':400,'gpu_clock':2800,'gpu_memory_busy':80})
+        result=self.collector.summary()
+        self.driver.assert_not_called();self.host.assert_not_called();self.gpu.assert_not_called()
+        self.assertEqual(result['hardware']['gpu_clock'],2800)
+        self.assertEqual(result['power_stats'],{'average_watts':400,'samples':1})
+        self.status.update(loaded=False,activity={'in_flight':0})
+        self.collector.gpu_probe.return_value={'gpu_power':70}
+        result=self.collector.summary()
+        self.assertEqual(result['power_stats'],{'average_watts':400,'samples':1})
+
+    def test_foreign_listener_cannot_attribute_power_to_strata(self):
+        self.collector.gpu_probe=lambda:{'gpu_power':400}
+        self.listener.net_connections.return_value=[]
+        with patch.object(telemetry.socket,'create_connection',side_effect=OSError):result=self.collector.summary()
+        self.assertIsNone(result['power_stats']['average_watts'])
+        self.assertEqual(result['power_stats']['samples'],0)
+
+    def test_missing_live_metrics_do_not_invent_active_power(self):
+        self.metrics['live']=None
+        self.status['activity']['in_flight']=0
+        self.collector.gpu_probe=lambda:{'gpu_power':70}
+        result=self.collector.summary()
+        self.assertEqual(result['power_stats']['samples'],0)
+        self.assertIsNone(result['power_stats']['average_watts'])
+
+    def test_smi_partial_fields_preserve_supported_metrics(self):
+        self.metrics['hardware']={}
+        self.driver.return_value.stdout='4, 100, 32768, 40, 60, N/A, 17001, 2, 600'
+        result=self.collector.collect()
+        self.assertNotIn('gpu_clock',result['hardware'])
+        self.assertEqual(result['hardware']['gpu_memory_clock'],17001)
+        self.assertEqual(result['hardware']['gpu_memory_busy'],2)
+        self.assertEqual(result['hardware']['gpu_power_limit'],600)
 
     def test_compute_process_probe_is_cached_across_detailed_reads(self):
         self.collector.collect()

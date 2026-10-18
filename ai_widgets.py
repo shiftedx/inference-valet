@@ -18,6 +18,67 @@ def scale(widget):
     return float(widget.tk.call('tk','scaling'))/(96/72)
 
 
+def reveal_tooltip(tip,owner):
+    """Keep help owned by and above its window without moving keyboard focus."""
+    tip.transient(owner.winfo_toplevel())
+    tip.attributes('-topmost',True)
+    tip.deiconify()
+    tip.lift()
+    # Tk does not establish a native owner for override-redirect windows on Windows.
+    # Set an owner and raise without activation so a topmost tray cannot cover help.
+    import os
+    if os.name=='nt':
+        import ctypes
+        from ctypes import wintypes
+        user=ctypes.windll.user32
+        user.GetAncestor.argtypes=[wintypes.HWND,wintypes.UINT];user.GetAncestor.restype=wintypes.HWND
+        handle=user.GetAncestor(tip.winfo_id(),2)
+        parent=user.GetAncestor(owner.winfo_toplevel().winfo_id(),2)
+        set_owner=user.SetWindowLongPtrW if ctypes.sizeof(ctypes.c_void_p)==8 else user.SetWindowLongW
+        set_owner.argtypes=[wintypes.HWND,ctypes.c_int,ctypes.c_ssize_t];set_owner.restype=ctypes.c_ssize_t
+        set_owner(handle,-8,parent)
+        user.SetWindowPos.argtypes=[wintypes.HWND,wintypes.HWND,ctypes.c_int,ctypes.c_int,ctypes.c_int,ctypes.c_int,wintypes.UINT]
+        user.SetWindowPos(handle,wintypes.HWND(-1),0,0,0,0,0x0013)
+
+
+class Tooltip:
+    """Delayed, focus-accessible help that preserves the control's own bindings."""
+    def __init__(self,widget,text):
+        self.widget=widget;self.text=text;self.pending=None;self.tip=None
+        for event in ('<Enter>','<FocusIn>'):widget.bind(event,self.schedule,add='+')
+        for event in ('<Leave>','<FocusOut>','<ButtonPress>','<Escape>','<Destroy>'):widget.bind(event,self.hide,add='+')
+        widget.tooltip=self
+
+    def schedule(self,event=None):
+        self.hide();self.pending=self.widget.after(450,self.show)
+
+    def show(self,event=None):
+        self.hide()
+        text=self.text() if callable(self.text) else self.text.get() if hasattr(self.text,'get') else self.text
+        if not text or not self.widget.winfo_ismapped():return
+        widget=self.widget;factor=scale(widget)
+        self.tip=tk.Toplevel(widget);self.tip.withdraw();self.tip.overrideredirect(True)
+        tk.Label(self.tip,text=text,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),justify='left',wraplength=round(340*factor),padx=round(8*factor),pady=round(4*factor)).pack()
+        self.tip.update_idletasks()
+        left=widget.winfo_vrootx();top=widget.winfo_vrooty()
+        right=left+widget.winfo_vrootwidth();bottom=top+widget.winfo_vrootheight()
+        x=max(left,min(widget.winfo_rootx(),right-self.tip.winfo_reqwidth()))
+        y=widget.winfo_rooty()+widget.winfo_height()+round(4*factor)
+        if y+self.tip.winfo_reqheight()>bottom:y=max(top,widget.winfo_rooty()-self.tip.winfo_reqheight()-round(4*factor))
+        self.tip.geometry(f'+{x}+{y}')
+        reveal_tooltip(self.tip,widget)
+
+    def hide(self,event=None):
+        if self.pending is not None:
+            try:self.widget.after_cancel(self.pending)
+            except tk.TclError:pass
+            self.pending=None
+        if self.tip:
+            try:self.tip.destroy()
+            except tk.TclError:pass
+            self.tip=None
+
+
 def control_height(widget):
     factor=scale(widget)
     return max(round(CONTROL_HEIGHT*factor),tkfont.Font(root=widget,font=FIELD_FONT).metrics('linespace')+2*round(8*factor))

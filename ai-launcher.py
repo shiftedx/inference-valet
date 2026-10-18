@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 ROOT=pathlib.Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from ai_telemetry import Collector,PerformancePanel,THEME,strata_listener
-from ai_widgets import Surface,Button,Switch,ProfileSelect,ui_font
+from ai_widgets import Surface,Button,Switch,ProfileSelect,Tooltip,ui_font
 from ai_idle import Settings,IdlePolicy,GameDetector,idle_seconds,IDLE_MINUTES
 from ai_recovery import RecoveryPolicy,listener_present
 from ai_issues import record_issue,failure_code
@@ -336,17 +336,17 @@ class LauncherUI:
   canvas.bind('<MouseWheel>',lambda event:canvas.yview_scroll(-int(event.delta/120),'units'))
   self.dashboard_canvas=canvas
   hero=tk.Frame(frame,bg=THEME['bg']);hero.pack(fill='x')
-  controls=tk.Frame(hero,bg=hero.cget('bg'));controls.pack(fill='x',pady=(10,0))
-  picker_group=tk.Frame(controls,bg=hero.cget('bg'));picker_group.pack(side='left',fill='x',expand=True,padx=(0,10))
-  selector_header=tk.Frame(picker_group,bg=THEME['bg']);selector_header.pack(fill='x',pady=(0,3))
-  self._text(selector_header,'Model profile','body',color=THEME['muted']).pack(side='left')
-  self.edit_button=tk.Button(selector_header,text='Edit profile',command=self.edit_profile,font=ui_font('body'),bg=THEME['bg'],fg=THEME['muted'],activebackground=THEME['bg'],activeforeground=THEME['text'],relief='flat',bd=0,padx=0,pady=0,cursor='hand2',takefocus=True)
-  self.edit_button.pack(side='right');self.edit_button.bind('<Return>',lambda event:self.edit_profile())
+  controls=tk.Frame(hero,bg=hero.cget('bg'));controls.pack(fill='x',pady=(round(4*self.ui_scale),0))
+  picker_group=tk.Frame(controls,bg=hero.cget('bg'));picker_group.pack(side='left',fill='x',expand=True,padx=(0,round(8*self.ui_scale)))
   self.picker=ProfileSelect(picker_group,width=16,textvariable=self.selected,values=[PROFILE_NAMES[k] for k in self.keys],state='readonly')
-  self.picker.pack(fill='x')
-  actions=tk.Frame(controls,bg=hero.cget('bg'));actions.pack(side='right',anchor='s')
+  self.picker.pack(side='left',fill='x',expand=True)
+  self.edit_button=Button(picker_group,text='Edit',command=self.edit_profile)
+  self.edit_button.pack(side='right',padx=(round(8*self.ui_scale),0))
+  actions=tk.Frame(controls,bg=hero.cget('bg'));actions.pack(side='right')
   self.start_button=Button(actions,text='Load model',primary=True,command=lambda:self.begin('start'));self.start_button.pack(side='left')
   self.stop_button=Button(actions,text='Unload model',command=lambda:self.begin('stop'));self.stop_button.pack(side='left',padx=(6,0))
+  self.control_tooltips(self.picker,self.start_button,self.stop_button)
+  Tooltip(self.edit_button,'Changes apply on the next model load.')
   self.attention_row=tk.Frame(hero,bg=THEME['bg'])
   self.state_dot=self._text(self.attention_row,'●','caption',color=THEME['warning']);self.state_dot.pack(side='left',padx=(0,5))
   self.state_label=self._text(self.attention_row,variable=self.hero_state,size='caption',bold=True);self.state_label.pack(side='left',padx=(0,8))
@@ -358,14 +358,15 @@ class LauncherUI:
   self.auto_control.pack(side='left')
   self.delay_picker=ProfileSelect(auto_row,width=8,textvariable=self.delay_var,values=[f'{minutes} min' for minutes in IDLE_MINUTES],state='readonly')
   self.delay_picker.pack(side='left',padx=(8,0));self.delay_picker.bind('<<ComboboxSelected>>',self.set_restore_delay)
-  self.auto_note=self._text(auto_row,variable=self.auto_explanation,size='caption',color=THEME['muted'],wrap=350)
-  self.auto_note.pack(side='right',padx=(12,0))
-  auto_row.bind('<Configure>',lambda event:self.auto_note.configure(wraplength=max(120,event.width-self.auto_control.winfo_reqwidth()-self.delay_picker.winfo_reqwidth()-24)))
+  Tooltip(self.auto_control,'Restores the last-used model when idle. Games take priority.')
+  Tooltip(self.delay_picker,'Required idle time after stopping a model or leaving a game.')
+  self.status_strip=tk.Frame(auto_row,bg=THEME['bg']);self.status_strip.pack(side='left',fill='x',expand=True,padx=(16,0))
+  self.auto_note=self._text(hero,variable=self.auto_explanation,size='caption',color=THEME['muted'],wrap=650)
   tk.Frame(frame,bg=THEME['line'],height=1).pack(fill='x',pady=(12,0))
   performance_header=tk.Frame(frame,bg=THEME['bg']);performance_header.pack(fill='x',pady=(12,7))
   self._text(performance_header,'Performance','heading',True).pack(side='left')
   self._text(performance_header,'Activity · past minute','caption',color=THEME['muted']).pack(side='right')
-  self.performance=PerformancePanel(frame) if not stop else None
+  self.performance=PerformancePanel(frame,status_parent=self.status_strip) if not stop else None
   self.collector=Collector(fetch,servers,read_demand_status);self.latest_performance={}
   if self.performance:
    self.performance.on_layout=fit_dashboard
@@ -451,6 +452,13 @@ class LauncherUI:
   y=max(info.work.top+margin,min(rect.top,info.work.bottom-margin-height-decoration))
   self.window.geometry(f'{self.window.winfo_width()}x{height}+{rect.left}+{y}')
   self.dashboard_canvas.yview_moveto(0)
+ def control_tooltips(self,picker,start,stop,restore=None,delay=None):
+  Tooltip(picker,lambda:self.selected.get()+'\nLoad to apply this selection.')
+  Tooltip(start,lambda:self.selected.get())
+  Tooltip(stop,'Releases the model’s GPU memory.')
+  if restore:Tooltip(restore,'Restores the last-used model when idle. Games take priority.')
+  if delay:Tooltip(delay,'Required idle time after stopping a model or leaving a game.')
+
  def _text(self,parent,text='',size='body',bold=False,color=None,variable=None,wrap=0):
   import tkinter as tk
   return tk.Label(parent,text=text,textvariable=variable,bg=parent.cget('bg'),fg=color or THEME['text'],font=ui_font(size,bold),anchor='w',justify='left',wraplength=wrap,bd=0)
@@ -500,36 +508,38 @@ class LauncherUI:
    self.popup_scroll=ttk.Scrollbar(outer,orient='vertical',command=self.popup_canvas.yview)
    self.popup_canvas.configure(yscrollcommand=self.popup_scroll.set)
    self.popup_canvas.pack(side='left',fill='both',expand=True)
-   content=tk.Frame(self.popup_canvas,bg=THEME['bg'],padx=17,pady=15)
+   content=tk.Frame(self.popup_canvas,bg=THEME['bg'],padx=round(18*self.ui_scale),pady=round(14*self.ui_scale))
    self.popup_window_item=self.popup_canvas.create_window((0,0),window=content,anchor='nw')
    self.popup_content=content
    content.bind('<Configure>',lambda event:self.popup_canvas.configure(scrollregion=self.popup_canvas.bbox('all')))
    self.popup_canvas.bind('<Configure>',lambda event:self.popup_canvas.itemconfigure(self.popup_window_item,width=event.width))
    self.popup_canvas.bind('<MouseWheel>',lambda event:self.popup_canvas.yview_scroll(-int(event.delta/120),'units'))
-   header=tk.Frame(content,bg=THEME['bg']);header.pack(fill='x',pady=(0,14))
+   header=tk.Frame(content,bg=THEME['bg']);header.pack(fill='x',pady=(0,round(12*self.ui_scale)))
    self.popup_brand_image=ImageTk.PhotoImage(icon_image(round(28*self.ui_scale)))
-   tk.Label(header,image=self.popup_brand_image,bg=THEME['bg'],bd=0).pack(side='left',padx=(0,8))
+   tk.Label(header,image=self.popup_brand_image,bg=THEME['bg'],bd=0).pack(side='left',padx=(0,round(8*self.ui_scale)))
    self._text(header,'Inference Valet','heading',True).pack(side='left')
-   tk.Button(header,text='×',command=self.hide_popup,bg=THEME['bg'],fg=THEME['muted'],activebackground=THEME['card'],activeforeground=THEME['text'],bd=0,font=ui_font('heading'),takefocus=True).pack(side='right')
-   hero_surface=Surface(content,padding=(14,12));hero_surface.pack(fill='x')
-   hero=hero_surface.body
-   self.popup_state=self._text(hero,variable=self.hero_state,size='body',bold=True,color=self.state_label.cget('fg'));self.popup_state.pack(anchor='w')
-   self.popup_profile=self._text(hero,variable=self.hero_profile,size='heading',bold=True,wrap=round(325*self.ui_scale));self.popup_profile.pack(anchor='w',pady=(3,0))
-   self.popup_note=self._text(hero,variable=self.hero_note,size='caption',color=THEME['muted'],wrap=325);self.popup_note.pack(anchor='w',pady=(4,0))
-   self._text(content,'Model profile','body',color=THEME['muted']).pack(anchor='w',pady=(15,6))
+   Button(header,text='×',command=self.hide_popup,quiet=True).pack(side='right')
+   self.popup_status=tk.Frame(content,bg=THEME['bg']);self.popup_status.pack(fill='x',pady=(0,round(8*self.ui_scale)))
+   self.popup_helper=tk.StringVar(value='')
+   self.popup_note=self._text(content,variable=self.popup_helper,size='caption',color=THEME['muted'],wrap=round(340*self.ui_scale))
    self.popup_picker=ProfileSelect(content,textvariable=self.selected,values=[PROFILE_NAMES[k] for k in self.keys],state='readonly')
    self.popup_picker.pack(fill='x')
-   actions=tk.Frame(content,bg=THEME['bg']);actions.pack(fill='x',pady=(10,0))
-   self.popup_start=Button(actions,text='Load model',primary=True,command=lambda:self.begin('start'));self.popup_start.pack(side='left')
-   self.popup_stop=Button(actions,text='Unload',command=lambda:self.begin('stop'));self.popup_stop.pack(side='left',padx=(8,0))
-   tk.Frame(content,bg=THEME['line'],height=1).pack(fill='x',pady=(15,10))
+   actions=tk.Frame(content,bg=THEME['bg']);actions.pack(fill='x',pady=(round(8*self.ui_scale),0))
+   self.popup_start=Button(actions,text='Load model',primary=True,command=lambda:self.begin('start'))
+   self.popup_stop=Button(actions,text='Unload',command=lambda:self.begin('stop'))
+   actions.columnconfigure((0,1),weight=1,uniform='popup_actions')
+   self.popup_actions_stacked=None
+   tk.Frame(content,bg=THEME['line'],height=1).pack(fill='x',pady=(round(12*self.ui_scale),round(8*self.ui_scale)))
    restore_row=tk.Frame(content,bg=THEME['bg']);restore_row.pack(fill='x')
-   Switch(restore_row,text='Restore when idle',variable=self.auto_var,command=self.toggle_auto).pack(side='left')
-   self.popup_delay_picker=ProfileSelect(restore_row,width=8,textvariable=self.delay_var,values=[f'{minutes} min' for minutes in IDLE_MINUTES],state='readonly');self.popup_delay_picker.pack(side='right');self.popup_delay_picker.bind('<<ComboboxSelected>>',self.set_restore_delay)
-   self.popup_auto_note=self._text(content,variable=self.auto_explanation,size='caption',color=THEME['muted'],wrap=340);self.popup_auto_note.pack(anchor='w',pady=(2,0))
-   tk.Frame(content,bg=THEME['line'],height=1).pack(fill='x',pady=(15,10))
-   self.popup_performance=PerformancePanel(content,compact=True);self.popup_performance.pack(fill='x')
-   Button(content,text='Open dashboard  ↗',primary=True,command=self.show).pack(fill='x',pady=(16,0))
+   self.popup_restore_switch=Switch(restore_row,text='Restore when idle',variable=self.auto_var,command=self.toggle_auto)
+   restore_row.columnconfigure(0,weight=1)
+   self.popup_delay_picker=ProfileSelect(restore_row,width=8,textvariable=self.delay_var,values=[f'{minutes} min' for minutes in IDLE_MINUTES],state='readonly');self.popup_delay_picker.bind('<<ComboboxSelected>>',self.set_restore_delay)
+   self.control_tooltips(self.popup_picker,self.popup_start,self.popup_stop,self.popup_restore_switch,self.popup_delay_picker)
+   self.fit_popup_actions(round(380*self.ui_scale))
+   self.popup_auto_note=self._text(content,variable=self.auto_explanation,size='caption',color=THEME['muted'],wrap=340)
+   self.popup_restore_divider=tk.Frame(content,bg=THEME['line'],height=1);self.popup_restore_divider.pack(fill='x',pady=(round(12*self.ui_scale),round(8*self.ui_scale)))
+   self.popup_performance=PerformancePanel(content,compact=True,status_parent=self.popup_status);self.popup_performance.pack(fill='x')
+   Button(content,text='Open dashboard  ↗',primary=True,command=self.show).pack(fill='x',pady=(round(16*self.ui_scale),0))
    self._bind_scroll_region(content,self.popup_canvas)
    self.popup.bind('<Escape>',lambda event:self.hide_popup())
    self.popup.bind('<Return>',lambda event:self.show() if event.widget==self.popup else None)
@@ -539,24 +549,29 @@ class LauncherUI:
     self.popup.after(180,check)
    self.popup.bind('<FocusOut>',dismiss)
   if self.latest_performance:self.popup_performance.update(self.latest_performance)
+  else:self.popup_performance.update_activity({'state':'unknown','title':self.hero_state.get()})
   import ctypes
   from ctypes import wintypes
   point=wintypes.POINT();ctypes.windll.user32.GetPhysicalCursorPos(ctypes.byref(point))
   self.popup_monitor_anchor=anchor or (point.x,point.y)
-  self.position_popup();self.popup.lift();self.popup.focus_force();self.update_controls()
+  self.update_controls();self.position_popup();self.popup.lift();self.popup.focus_force()
   if self.observe:self.refresh()
  def fit_popup_actions(self,available_width):
-  start_width=self.popup_start.winfo_reqwidth();stop_width=self.popup_stop.winfo_reqwidth()
-  side_by_side=start_width+stop_width+44
-  if available_width<side_by_side:
-   if self.popup_start.pack_info()['side']!='top':
-    self.popup_start.pack_forget();self.popup_stop.pack_forget()
-    self.popup_start.pack(fill='x');self.popup_stop.pack(fill='x',pady=(8,0))
-   return max(start_width,stop_width)+36
-  if self.popup_start.pack_info()['side']!='left':
-   self.popup_start.pack_forget();self.popup_stop.pack_forget()
-   self.popup_start.pack(side='left');self.popup_stop.pack(side='left',padx=(8,0))
-  return side_by_side
+  width=max(self.popup_start.winfo_reqwidth(),self.popup_stop.winfo_reqwidth())
+  inset=round(36*self.ui_scale)+2;gap=round(8*self.ui_scale)
+  stacked=available_width<2*width+inset+gap
+  if stacked!=self.popup_actions_stacked:
+   self.popup_start.grid_forget();self.popup_stop.grid_forget()
+   self.popup_start.grid(row=0,column=0,columnspan=2 if stacked else 1,sticky='ew',padx=0 if stacked else (0,gap//2))
+   self.popup_stop.grid(row=1 if stacked else 0,column=0 if stacked else 1,columnspan=2 if stacked else 1,sticky='ew',padx=0 if stacked else (gap-gap//2,0),pady=(gap,0) if stacked else 0)
+   self.popup_actions_stacked=stacked
+  actions_width=width+inset if stacked else 2*width+inset+gap
+  switch_width=self.popup_restore_switch.winfo_reqwidth();delay_width=self.popup_delay_picker.winfo_reqwidth()
+  restore_stacked=available_width<switch_width+delay_width+inset+gap
+  self.popup_restore_switch.grid(row=0,column=0,sticky='w')
+  self.popup_delay_picker.grid(row=1 if restore_stacked else 0,column=0 if restore_stacked else 1,sticky='w' if restore_stacked else 'e',padx=0 if restore_stacked else (gap,0),pady=(gap,0) if restore_stacked else 0)
+  restore_width=(max(switch_width,delay_width) if restore_stacked else switch_width+delay_width+gap)+inset
+  return max(actions_width,restore_width)
  def position_popup(self):
   import ctypes
   from ctypes import wintypes
@@ -581,9 +596,8 @@ class LauncherUI:
    action_width=self.fit_popup_actions(available_width)
    width=min(available_width,max(width,action_width))
    self.popup_canvas.itemconfigure(self.popup_window_item,width=width-2)
-   self.popup_note.configure(wraplength=max(140,width-round(48*self.ui_scale)))
-   self.popup_profile.configure(wraplength=max(140,width-round(48*self.ui_scale)))
-   self.popup_auto_note.configure(wraplength=max(140,width-48))
+   self.popup_note.configure(wraplength=max(140,width-round(36*self.ui_scale)))
+   self.popup_auto_note.configure(wraplength=max(140,width-round(36*self.ui_scale)))
    self.popup.update_idletasks()
    natural_height=max(1,self.popup_content.winfo_reqheight()+2)
    _,height=popup_size(work,scale,natural_height/scale)
@@ -592,9 +606,8 @@ class LauncherUI:
     scrollbar_width=self.popup_scroll.winfo_reqwidth()
     width=min(available_width,max(width,action_width+scrollbar_width))
     self.popup_canvas.itemconfigure(self.popup_window_item,width=width-scrollbar_width-2)
-    self.popup_note.configure(wraplength=max(140,width-scrollbar_width-round(48*self.ui_scale)))
-    self.popup_profile.configure(wraplength=max(140,width-scrollbar_width-round(48*self.ui_scale)))
-    self.popup_auto_note.configure(wraplength=max(140,width-scrollbar_width-48))
+    self.popup_note.configure(wraplength=max(140,width-scrollbar_width-round(36*self.ui_scale)))
+    self.popup_auto_note.configure(wraplength=max(140,width-scrollbar_width-round(36*self.ui_scale)))
     self.popup.update_idletasks()
     natural_height=max(1,self.popup_content.winfo_reqheight()+2)
     _,height=popup_size(work,scale,natural_height/scale)
@@ -638,6 +651,8 @@ class LauncherUI:
   elif 'API recovery' in reason:explanation=reason
   else:explanation=''
   self.auto_explanation.set(explanation)
+  if explanation:self.auto_note.pack(fill='x',pady=(4,0))
+  else:self.auto_note.pack_forget()
   status=self.status.get()
   if 'start' in self.active:
    title='Loading model…';profile=PROFILE_NAMES.get(self.keys[self.picker.current()],'')
@@ -675,7 +690,16 @@ class LauncherUI:
    self.hero_state.set('Game priority');self.hero_note.set(reason.split('blocked:',1)[1].strip());color=THEME['warning'];self.state_label.configure(fg=color);self.state_dot.configure(fg=color);title='Game priority'
   if title in ('Ready','Model running','Checking model…','No model loaded','Waiting for request','Restore paused'):self.attention_row.pack_forget()
   else:self.attention_row.pack(fill='x',pady=(6,0),before=self.model_divider)
-  if self.popup:self.popup_state.configure(fg=color)
+  if self.popup:
+   helpful=note if title not in ('Ready','Model running','Checking model…','Reading prompt','Generating','Working','Loaded','Restore paused','No model loaded','Loading model','Loading model…') else ''
+   if title in ('Unloaded','Waiting for request'):helpful='Loads on next request.'
+   selected=self.keys[self.picker.current()]
+   if not helpful and self.current and selected!=self.current:helpful='Loaded: '+PROFILE_NAMES.get(self.current,self.current)
+   self.popup_helper.set(helpful)
+   if helpful:self.popup_note.pack(fill='x',before=self.popup_picker,pady=(0,round(8*self.ui_scale)))
+   else:self.popup_note.pack_forget()
+   if explanation and self.auto_enabled:self.popup_auto_note.pack(fill='x',before=self.popup_restore_divider,pady=(round(4*self.ui_scale),0))
+   else:self.popup_auto_note.pack_forget()
  def update_controls(self):
   self.refresh_display()
   load_label='Switch model' if self.current or self.status.get().startswith('Running: ') or 'start' in self.active else 'Load model'
@@ -826,7 +850,7 @@ class LauncherUI:
      profile=(None,'Telemetry unavailable; retrying.')
     self.events.put(('snapshot',(epoch,profile,reading)))
    self.telemetry_worker.submit(sample)
-  self.refresh_timer=self.window.after(2000 if visible else 10000,self.refresh)
+  self.refresh_timer=self.window.after(2000 if visible or self.latest_performance.get('identity') else 10000,self.refresh)
 
 def gui(stop=False,check=False,hidden=False):
  if check:

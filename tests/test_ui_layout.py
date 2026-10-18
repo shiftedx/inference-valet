@@ -223,11 +223,11 @@ class LayoutTests(unittest.TestCase):
                     canvas_right = app.dashboard_canvas.winfo_rootx() + app.dashboard_canvas.winfo_width()
                     self.assertEqual(app.picker.winfo_height(),app.start_button.winfo_height())
                     self.assertEqual(app.picker.winfo_height(),app.stop_button.winfo_height())
-                    tops=[widget.winfo_rooty() for widget in (app.picker,app.start_button,app.stop_button)]
+                    tops=[widget.winfo_rooty() for widget in (app.picker,app.edit_button,app.start_button,app.stop_button)]
                     self.assertEqual(len(set(tops)),1)
                     plots=list(app.performance.plots.values())
                     self.assertLessEqual(max(p.winfo_width() for p in plots)-min(p.winfo_width() for p in plots),1)
-                    for control in (app.picker, app.start_button, app.stop_button):
+                    for control in (app.picker, app.edit_button, app.start_button, app.stop_button):
                         self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), canvas_right)
                     app.dashboard_canvas.yview_moveto(1)
                     app.window.update()
@@ -235,8 +235,11 @@ class LayoutTests(unittest.TestCase):
                     self.assertLessEqual(app.performance.details_button.winfo_rooty() + app.performance.details_button.winfo_height(), canvas_bottom)
                     app.show_popup(anchor=(100, 100))
                     app.window.update()
+                    self.assertLessEqual(abs(app.popup_start.winfo_width()-app.popup_stop.winfo_width()),1)
+                    self.assertEqual(app.popup_start.winfo_y(),app.popup_stop.winfo_y())
                     popup_right = app.popup_canvas.winfo_rootx() + app.popup_canvas.winfo_width()
-                    for control in (app.popup_picker, app.popup_start, app.popup_stop):
+                    for control in (app.popup_picker, app.popup_start, app.popup_stop, app.popup_delay_picker):
+                        self.assertGreaterEqual(control.winfo_width(),control.winfo_reqwidth())
                         self.assertLessEqual(control.winfo_rootx() + control.winfo_width(), popup_right)
                     self.assertTrue(app.popup_content.winfo_reqheight() <= app.popup_canvas.winfo_height()
                                     or app.popup_scroll.winfo_ismapped())
@@ -423,15 +426,44 @@ class LayoutTests(unittest.TestCase):
         finally:
             app.quit()
 
+    def test_tray_helpers_are_conditional_and_status_is_above_selector(self):
+        import time
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            app.current=app.keys[0];app.status.set('Running: model')
+            app.latest_performance={'sampled':time.monotonic(),'activity':{'state':'ready','title':'Ready','detail':'Strata is loaded and idle','gpu_process_count':15}}
+            app.show_popup(anchor=(100,100));app.window.update()
+            self.assertFalse(app.popup_note.winfo_ismapped())
+            self.assertFalse(app.popup_auto_note.winfo_ismapped())
+            self.assertLess(app.popup_performance.activity_header.winfo_rooty(),app.popup_picker.winfo_rooty())
+            app.selected.set(launcher.PROFILE_NAMES[app.keys[1]]);app.refresh_display();app.window.update()
+            self.assertIn('Loaded:',app.popup_helper.get())
+            self.assertTrue(app.popup_note.winfo_ismapped())
+            app.latest_performance['activity']={'state':'blocked','title':'Waiting for resources','detail':'Insufficient GPU memory'}
+            app.update_controls();app.window.update()
+            self.assertEqual(app.popup_helper.get(),'Insufficient GPU memory')
+            app.latest_performance['activity']={'state':'ready','title':'Ready'}
+            app.selected.set(launcher.PROFILE_NAMES[app.current]);app.refresh_display();app.window.update()
+            self.assertFalse(app.popup_note.winfo_ismapped())
+        finally:app.quit()
+
     def test_narrow_popup_stacks_actions(self):
         app = launcher.LauncherUI(enable_tray=False, observe=False)
         try:
             app.show_popup(anchor=(100, 100))
-            minimum = app.fit_popup_actions(320)
+            # Fit the widest individual control, but not two controls side by side.
+            # Use physical widget measurements so this also covers high desktop DPI.
+            available = max(w.winfo_reqwidth() for w in (app.popup_start,app.popup_stop,app.popup_restore_switch,app.popup_delay_picker))+2*int(app.popup_content.cget('padx'))+2
+            minimum = app.fit_popup_actions(available)
+            app.popup.geometry(f'{available}x{app.popup.winfo_height()}')
             app.window.update()
-            self.assertLessEqual(minimum, 320)
-            self.assertEqual(app.popup_start.pack_info()['side'], 'top')
-            self.assertEqual(app.popup_stop.pack_info()['side'], 'top')
+            self.assertLessEqual(minimum, available)
+            self.assertGreater(app.popup_delay_picker.winfo_y(),app.popup_restore_switch.winfo_y()+app.popup_restore_switch.winfo_height())
+            for control in (app.popup_start,app.popup_stop,app.popup_restore_switch,app.popup_delay_picker):
+                self.assertGreaterEqual(control.winfo_width(),control.winfo_reqwidth())
+            self.assertEqual(app.popup_start.winfo_x(), app.popup_stop.winfo_x())
+            self.assertEqual(app.popup_start.winfo_width(), app.popup_stop.winfo_width())
+            self.assertGreater(app.popup_stop.winfo_y(), app.popup_start.winfo_y()+app.popup_start.winfo_height())
         finally:
             app.quit()
 

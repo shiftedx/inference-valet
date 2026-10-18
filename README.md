@@ -14,15 +14,29 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 
 <p align="center"><a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
-<p align="center"><img src="docs/assets/panel.png" width="940" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></p>
+<p align="center"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></p>
 
 | Automatic game detection | Automatic model loading |
 |---|---|
 | Detect Steam games, Windows game records, configured executables and fullscreen/presentation activity. Block new loads; optional on-demand mode unloads after its game grace period. | Eager mode restores the last profile after **5–30 idle minutes**. Optional on-demand mode loads on the first request when games and resource guards permit. |
 | **Native controls** | **Performance at a glance** |
-| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Backend-supported timing, GPU/RAM, request activity and agent context. Scrollable technical tables; validated engine settings apply on the next load. |
+| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Backend-supported timing, GPU/RAM, clocks, temperature, memory activity, power and Strata active-power average. Scrollable technical tables; validated engine settings apply on the next load. |
 
 <p align="center"><img src="docs/assets/lifecycle.svg" width="940" alt="Detected game pauses loading; game closes and PC becomes idle: restore; optional first-request loading"></p>
+
+
+<details>
+<summary>Tray and profile settings</summary>
+<p align="center"><img src="docs/assets/tray.png" width="300" alt="Compact tray with live GPU metrics"></p>
+<p align="center">
+<img src="docs/assets/profile-editor.png" width="300" alt="Profile settings: context, agents and output budgets">
+<img src="docs/assets/memory-editor.png" width="300" alt="Memory settings: expert cache, VRAM reserve and KV residency">
+<img src="docs/assets/engine-editor.png" width="300" alt="Engine settings: prompt batches, CPU workers and draft tokens">
+</p>
+</details>
+
+- **Memory activity:** VRAM read/write busy time; capacity: GiB meter.
+- **Strata avg:** whole-GPU power sampled during Strata work; resets when Valet restarts.
 
 ## Run
 

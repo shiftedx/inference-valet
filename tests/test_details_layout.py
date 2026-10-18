@@ -9,6 +9,28 @@ sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from ai_telemetry import PerformancePanel
 
 class DetailsLayoutTests(unittest.TestCase):
+ def test_tabs_stay_centered_and_level_when_selection_changes(self):
+  from tkinter import ttk
+  root=tk.Tk();ttk.Style(root).theme_use('clam')
+  root.geometry('760x650')
+  try:
+   panel=PerformancePanel(root);panel.pack(fill='both',expand=True);panel.toggle_details()
+   notebook=panel.details_notebook
+   for selected in panel.detail_tabs.values():
+    notebook.select(selected);root.update()
+    regions={}
+    for y in range(50):
+     for x in range(notebook.winfo_width()):
+      if notebook.identify(x,y)=='label':
+       tab=str(notebook.tk.call(notebook._w,'identify','tab',x,y))
+       regions.setdefault(tab,[]).append((x,y))
+    self.assertEqual(len(regions),3)
+    boxes=[(min(x for x,y in points),min(y for x,y in points),max(x for x,y in points),max(y for x,y in points)) for points in regions.values()]
+    self.assertEqual(len({(box[1],box[3]) for box in boxes}),1)
+    self.assertEqual(len({box[2]-box[0] for box in boxes}),1)
+    self.assertLessEqual(abs(min(b[0] for b in boxes)+max(b[2] for b in boxes)-notebook.winfo_width()),2)
+  finally:root.destroy()
+
  def test_engine_default_and_sources_preserved(self):
   root=tk.Tk();root.geometry('900x950')
   try:

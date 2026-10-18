@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ai_branding import apply_window_icon
-from ai_widgets import THEME, Button, ProfileSelect, TextField, scale, ui_font
+from ai_widgets import THEME, Button, ProfileSelect, TextField, Tooltip, scale, ui_font
 
 class ProfileEditor:
     def __init__(self, parent, store, key, on_save, style_window, initial_page='Profile'):
@@ -16,16 +16,17 @@ class ProfileEditor:
         self.vars={key:tk.StringVar(self.window,value=str(value)) for key,value in values.items()}
         self.original={key:var.get() for key,var in self.vars.items()}
         self.fields={};self.field_pages={};self.error=tk.StringVar(self.window,value='')
-        body=tk.Frame(self.window,bg=THEME['bg']);body.pack(fill='both',expand=True,padx=round(22*self.factor),pady=round(18*self.factor))
+        body=tk.Frame(self.window,bg=THEME['bg']);body.pack(fill='both',expand=True,padx=round(18*self.factor),pady=round(14*self.factor))
         tk.Label(body,text='Profile settings',bg=THEME['bg'],fg=THEME['text'],font=ui_font('heading',True),anchor='w').pack(fill='x')
         self.apply_note=tk.StringVar(self.window,value='Changes apply on the next model load.')
-        tk.Label(body,textvariable=self.apply_note,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x',pady=(4,12))
-        tabs=tk.Frame(body,bg=THEME['bg']);tabs.pack(fill='x')
+        tk.Label(body,textvariable=self.apply_note,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x',pady=(round(4*self.factor),round(12*self.factor)))
+        tabs=tk.Frame(body,bg=THEME['bg']);tabs.pack(anchor='center')
         self.pages={};self.tab_buttons={}
-        for name in ('Profile','Memory','Engine'):
+        for index,name in enumerate(('Profile','Memory','Engine')):
             button=Button(tabs,text=name,command=lambda name=name:self.select_page(name),quiet=True)
-            button.pack(side='left',padx=(0,4));self.tab_buttons[name]=button
-        tk.Frame(body,bg=THEME['line'],height=1).pack(fill='x',pady=(6,12))
+            tabs.columnconfigure(index,weight=1,uniform='editor_tabs')
+            button.grid(row=0,column=index,sticky='ew',padx=round(2*self.factor));self.tab_buttons[name]=button
+        tk.Frame(body,bg=THEME['line'],height=1).pack(fill='x',pady=(round(8*self.factor),round(12*self.factor)))
         content=tk.Frame(body,bg=THEME['bg']);content.pack(fill='both',expand=True)
         for name in ('Profile','Memory','Engine'):
             self.pages[name]=tk.Frame(content,bg=THEME['bg'])
@@ -55,10 +56,10 @@ class ProfileEditor:
             self.field('Engine',key,label,hint=hint)
         # The footer stays outside the pages so validation and Save remain visible.
         tk.Label(body,textvariable=self.error,bg=THEME['bg'],fg=THEME['error'],font=ui_font('caption'),
-                 wraplength=round(560*self.factor),anchor='w',justify='left').pack(fill='x',pady=(8,4))
+                 wraplength=round(560*self.factor),anchor='w',justify='left').pack(fill='x',pady=(round(8*self.factor),round(4*self.factor)))
         footer=tk.Frame(body,bg=THEME['bg']);footer.pack(fill='x')
         self.save_button=Button(footer,text='Save for next load',primary=True,command=self.save);self.save_button.pack(side='right')
-        Button(footer,text='Cancel',command=self.close,quiet=True).pack(side='right',padx=(0,8))
+        Button(footer,text='Cancel',command=self.close,quiet=True).pack(side='right',padx=(0,round(8*self.factor)))
         self.select_page('Profile')
         self.window.update_idletasks()
         # Reserve enough height for either tab; selecting Engine never resizes the dialog.
@@ -98,6 +99,15 @@ class ProfileEditor:
             field=TextField(line,textvariable=self.vars[key],width=16)
         if page!='Profile':field.pack(fill='x',pady=(round(5*self.factor),0))
         else:field.grid(row=index,column=1,sticky='ew',pady=round(4*self.factor))
+        help_text={
+            'name':self.vars[key],
+            'context':'Larger windows can require more memory.',
+            'max_tokens':'Includes reasoning; capped by remaining context.',
+            'reasoning':'Counts toward Maximum output.',
+            'expert_cache':'Auto fits experts within available VRAM.',
+            'reserve':'Higher values leave less room for cached experts.'
+        }.get(key)
+        if help_text is not None:Tooltip(field,help_text)
         self.fields[key]=field
 
     def select_page(self,name):

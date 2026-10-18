@@ -33,7 +33,8 @@ class ActivityPanelTests(unittest.TestCase):
         self.root.update()
         self.assertTrue(panel.activity_header.winfo_ismapped())
         self.assertIn('Reading prompt', panel.activity_title.get())
-        self.assertIn('ComfyUI: Generating', panel.activity_note.get())
+        self.assertEqual(panel.activity_note.get(),'Other GPU users: game.exe')
+        self.assertEqual(panel.comfy_observation.get(),'1 running · 0 queued')
         self.assertFalse(panel.details_expanded)
         self.root.geometry('900x950')
         panel.toggle_details()
@@ -97,6 +98,46 @@ class ActivityPanelTests(unittest.TestCase):
         self.assertEqual(len(panel.request_history), 1)
         self.assertEqual(panel.identity, 'one')
         self.assertIsNone(panel.latest['live_speed'])
+        self.assertIn('stale', panel.source_marks['speed'].cget('text'))
+
+    def test_strip_uses_full_process_count_and_mixed_throughput_sources(self):
+        import time
+        strip = tk.Frame(self.root)
+        strip.pack(fill='x')
+        panel = PerformancePanel(self.root, status_parent=strip)
+        panel.pack(fill='both', expand=True)
+        panel.update({'last_at': time.time()-51, 'last_speed': 215.7, 'prefill_speed': 0,
+                      'activity': {'state': 'reading', 'title': 'Reading prompt',
+                                   'gpu_process_count': 14, 'gpu_processes': [{}]*8,
+                                   'gpu_note': '14 other compute processes reported on GPU 0',
+                                   'comfy': {'state': 'unavailable', 'title': 'Unavailable'}}})
+        self.root.update()
+        self.assertEqual(panel.activity_header.master, strip)
+        self.assertEqual(panel.gpu_mark.cget('text'), '▣ 14')
+        self.assertEqual(panel.source_marks['speed'].cget('text'), '◷ 51s')
+        self.assertEqual(panel.source_marks['prompt_speed'].cget('text'), '▶')
+        self.assertFalse(panel.activity_note_label.winfo_ismapped())
+        self.assertEqual(panel.activity_note.get(),'')
+        panel.activity_tip.show_tip()
+        self.assertIsNone(panel.activity_tip.tip)
+        panel.mark_stale()
+        self.assertEqual(panel.gpu_mark.cget('text'), '▣ —')
+
+    def test_short_state_keeps_details_on_hover_and_only_detected_comfy_visible(self):
+        strip=tk.Frame(self.root);strip.pack(fill='x')
+        panel=PerformancePanel(self.root,status_parent=strip);panel.pack(fill='both',expand=True)
+        activity={'state':'unloaded','title':'Unloaded','detail':'Model will load on the next admitted request','gpu_process_count':15}
+        for state,visible in (('unavailable',False),('not_configured',False),('idle',True),('busy',True),('unavailable',False)):
+            panel.update({'activity':{**activity,'comfy':{'state':state,'title':state}}})
+            self.root.update()
+            self.assertEqual(panel.activity_title.get(),'Strata · Unloaded')
+            self.assertIn('next admitted request',panel.activity_note.get())
+            self.assertEqual(panel.gpu_mark.cget('text'),'▣ 15')
+            self.assertEqual(panel.gpu_observation.get(),'15 other GPU processes')
+            self.assertEqual(bool(panel.comfy_mark.winfo_ismapped()),visible)
+            self.assertGreaterEqual(panel.activity_marks.winfo_rootx(),panel.activity_title_label.winfo_rootx())
+        panel.mark_stale();self.root.update()
+        self.assertFalse(panel.comfy_mark.winfo_ismapped())
 
     def test_activity_preserves_six_metrics_at_common_scales(self):
         import importlib.util

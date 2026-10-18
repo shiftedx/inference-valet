@@ -3,6 +3,7 @@ import ctypes,math,socket,subprocess,time
 from collections import deque
 import psutil
 from ai_config import NVIDIA_SMI, CONFIG, STRATA_ROOT
+from ai_gpu import GpuTelemetry,ActivePowerAverage
 
 GIB=2**30
 def number(value):
@@ -53,9 +54,10 @@ def strata_listener(processes):
  return None
 
 class Collector:
- def __init__(self,fetch,servers,demand=None):
+ def __init__(self,fetch,servers,demand=None,gpu_probe=None):
   from ai_runtime_details import RuntimeDetailsReader
   self.fetch=fetch;self.servers=servers;self.demand=demand or (lambda:{})
+  self.gpu_probe=gpu_probe if gpu_probe is not None else GpuTelemetry();self.active_power=ActivePowerAverage()
   self.gpu_reading={};self.gpu_checked=float('-inf')
   self.runtime_details=RuntimeDetailsReader(STRATA_ROOT)
  def collect(self):return self._collect(True)
@@ -99,12 +101,16 @@ class Collector:
    elif processes:out['state']='loading'
   except (OSError,ValueError,KeyError,IndexError,TypeError,psutil.Error):
    out={'state':'telemetry unavailable · retrying','slots':[],'live_speed':None,'hardware':{}}
+  hardware.update(self.gpu_probe())
   # Driver telemetry also works when the model is unloaded; never spawn a visible console.
   if detailed and not out.get('hardware',{}).get('gpu_mem_total'):
    try:
-    run=subprocess.run([NVIDIA_SMI,'--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=2,creationflags=subprocess.CREATE_NO_WINDOW)
-    vals=[float(x.strip()) for x in run.stdout.splitlines()[0].split(',')]
-    hardware.update(gpu_util=vals[0],gpu_mem_used=vals[1]*2**20,gpu_mem_total=vals[2]*2**20,gpu_temp=vals[3],gpu_power=vals[4])
+    run=subprocess.run([NVIDIA_SMI,'--id=0','--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,clocks.current.graphics,clocks.current.memory,utilization.memory,power.limit','--format=csv,noheader,nounits'],capture_output=True,text=True,timeout=2,creationflags=subprocess.CREATE_NO_WINDOW)
+    vals=run.stdout.splitlines()[0].split(',')
+    for raw,key,multiplier in zip(vals,('gpu_util','gpu_mem_used','gpu_mem_total','gpu_temp','gpu_power','gpu_clock','gpu_memory_clock','gpu_memory_busy','gpu_power_limit'),(1,2**20,2**20,1,1,1,1,1,1)):
+     try:value=float(raw.strip())
+     except ValueError:continue
+     if number(value) is not None and value>=0:hardware[key]=value*multiplier
    except (OSError,ValueError,IndexError,subprocess.TimeoutExpired):pass
   out['hardware']={**out.get('hardware',{}),**hardware};out.update(sampled=sampled,identity=identity)
   if detailed and sampled-self.gpu_checked>=10:
@@ -122,6 +128,10 @@ class Collector:
    activity['blockers'].append('ComfyUI generation has configured admission priority')
    if activity['state']=='unloaded':
     activity.update(state='blocked',title='Waiting for GPU',detail='ComfyUI generation has configured admission priority')
+  native_live=metrics.get('live') if isinstance(metrics,dict) else None
+  native_work=isinstance(native_live,dict) and native_live.get('state') in ('reading','generating','loading')
+  active=verified and isinstance(status,dict) and (activity['state'] in ('reading','generating','loading','busy') or status.get('loaded') is True and native_work)
+  out['power_stats']=self.active_power.sample(sampled,out['hardware'].get('gpu_power'),active)
   out['activity']=activity;out['state']=activity['title'].lower()
   out['running']=activity.get('running');out['queued']=activity.get('queued')
   if activity['state'] in ('offline','unavailable'):
@@ -134,7 +144,7 @@ class Collector:
    out['memory_settings_pending']=self.runtime_details.pending_memory(runtime_config) if runtime_config else None
   return out
 
-from ai_widgets import THEME,Button,ui_font
+from ai_widgets import THEME,Button,Tooltip,ui_font,reveal_tooltip
 
 import tkinter as tk
 
@@ -171,9 +181,10 @@ class RequestTrend(tk.Canvas):
   self.bind('<Configure>',lambda event:self.draw())
   self.bind('<Enter>',self.show_tip);self.bind('<Leave>',self.hide_tip)
  def show_tip(self,event):
-  self.hide_tip();self.tip=tk.Toplevel(self);self.tip.overrideredirect(True)
+  self.hide_tip();self.tip=tk.Toplevel(self);self.tip.withdraw();self.tip.overrideredirect(True)
   self.tip.geometry(f'+{event.x_root+12}+{event.y_root+12}')
-  tk.Label(self.tip,text='Recent completed requests · up to 12\nTrend uses its observed range',bg=THEME['card'],fg=THEME['muted'],font=ui_font('caption'),padx=8,pady=4,justify='left').pack()
+  tk.Label(self.tip,text='Up to 12 completed requests; scale fits the values.',bg=THEME['card'],fg=THEME['muted'],font=ui_font('caption'),padx=8,pady=4,justify='left').pack()
+  reveal_tooltip(self.tip,self)
  def hide_tip(self,event=None):
   if self.tip:self.tip.destroy();self.tip=None
  def draw(self):
@@ -189,8 +200,72 @@ class RequestTrend(tk.Canvas):
    self.create_oval(x-self.scale,y-self.scale,x+self.scale,y+self.scale,fill=self.color,outline='')
    previous=(x,y)
 
+class StatusMark(tk.Label):
+ """Compact readout with the same explanation on hover and keyboard focus."""
+ def __init__(self,parent,description,**kwargs):
+  super().__init__(parent,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),takefocus=True,highlightthickness=1,highlightbackground=THEME['bg'],highlightcolor=THEME['accent'],**kwargs)
+  self.description=description;self.tip=None
+  self.bind('<Enter>',self.show_tip);self.bind('<FocusIn>',self.show_tip)
+  self.bind('<Leave>',self.hide_tip);self.bind('<FocusOut>',self.hide_tip)
+  self.bind('<Escape>',self.hide_tip);self.bind('<Destroy>',self.hide_tip)
+ def show_tip(self,event=None):
+  self.hide_tip()
+  text=self.description.get()
+  if not text:return
+  self.tip=tk.Toplevel(self);self.tip.withdraw();self.tip.overrideredirect(True)
+  anchor=getattr(self,'anchor_widget',self)
+  self.tip.geometry(f'+{anchor.winfo_rootx()}+{anchor.winfo_rooty()+anchor.winfo_height()+4}')
+  tk.Label(self.tip,text=text,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),padx=8,pady=5,wraplength=360,justify='left').pack()
+  reveal_tooltip(self.tip,anchor)
+ def hide_tip(self,event=None):
+  if self.tip:self.tip.destroy();self.tip=None
+
+class GpuTuningPanel(tk.Frame):
+ """Small tuning readouts; unsupported driver metrics take no space."""
+ def __init__(self,parent,compact=False):
+  super().__init__(parent,bg=THEME['bg'])
+  self.factor=float(self.tk.call('tk','scaling'))/(96/72);self.compact=compact
+  self.groups={};self.values={};self.visible=[];self.layout_key=None;self.bind('<Configure>',lambda event:self._layout());self.average_help=tk.StringVar(value='')
+  for key,title in (('gpu_clock','Core clock'),('gpu_memory_clock','Memory clock'),('gpu_memory_busy','Memory activity'),('gpu_temp','Temperature'),('gpu_power','Power'),('average_watts','Strata avg')):
+   group=tk.Frame(self,bg=THEME['bg']);self.groups[key]=group
+   tk.Label(group,text=title,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x')
+   value=tk.StringVar(value='—');self.values[key]=value
+   label=tk.Label(group,textvariable=value,bg=THEME['bg'],fg=THEME['text'],font=ui_font('caption',True),anchor='w');label.pack(fill='x')
+   help_text={'gpu_memory_busy':'Percent of sampling time spent reading or writing VRAM.','gpu_power':'Whole-GPU draw / power limit.','average_watts':self.average_help}.get(key)
+   if help_text is not None:Tooltip(group,help_text);Tooltip(label,help_text)
+ def update_values(self,hardware,stats):
+  available=[]
+  for key in self.groups:
+   value=number(stats.get(key) if key=='average_watts' else hardware.get(key))
+   if value is None or value<0:
+    self.groups[key].grid_remove();continue
+   suffix=' MHz' if key.endswith('clock') else '%' if key=='gpu_memory_busy' else ' °C' if key=='gpu_temp' else ' W'
+   text=fmt(value,suffix,0)
+   limit=number(hardware.get('gpu_power_limit'))
+   if key=='gpu_power' and limit is not None:text=f'{value:.0f} / {limit:.0f} W'
+   self.values[key].set(text);available.append(key)
+  self.average_help.set(f"Session average · {stats.get('samples',0)} active samples. Includes other GPU workloads.")
+  self.visible=available;self._layout()
+  return bool(available)
+ def _layout(self):
+  available=self.visible
+  if not available:return
+  gap=round(12*self.factor)
+  columns=min(3 if self.compact else 6,len(available))
+  needed=columns*max(self.groups[key].winfo_reqwidth() for key in available)+gap*(columns-1)
+  if columns>3 and self.winfo_width()>1 and self.winfo_width()<needed:columns=3
+  layout=(tuple(available),columns)
+  if layout==self.layout_key:return
+  self.layout_key=layout
+  for col in range(6):self.columnconfigure(col,weight=0,minsize=0,uniform='')
+  for col in range(columns):self.columnconfigure(col,weight=1,uniform='tuning')
+  for index,key in enumerate(available):self.groups[key].grid(row=index//columns,column=index%columns,sticky='ew',padx=(0,gap) if index%columns<columns-1 else 0,pady=(0,round(8*self.factor)) if index//columns<(len(available)-1)//columns else 0)
+ def mark_stale(self):
+  for key in self.visible:
+   if key!='average_watts':self.values[key].set('—')
+
 class PerformancePanel:
- def __init__(self, parent, compact=False):
+ def __init__(self, parent, compact=False, status_parent=None):
   self.on_edit_engine=lambda:None
   from tkinter import ttk
   self.compact=compact;self.samples=deque(maxlen=120);self.history=deque(maxlen=120);self.identity=None;self.latest={};self.on_layout=lambda:None;self.on_details=lambda expanded:None;self.request_history=deque(maxlen=12);self.last_request=None
@@ -200,12 +275,23 @@ class PerformancePanel:
   self.gpu_memory=tk.StringVar(value='—')
   self.speed=tk.StringVar(value='—');self.speed_note=tk.StringVar(value='No completed request')
   self.activity_title=tk.StringVar(value='Checking backend');self.activity_note=tk.StringVar(value='Waiting for a current reading')
-  self.activity_header=tk.Frame(self.frame,bg=THEME['bg'])
-  self.activity_title_label=self._label(self.activity_header,variable=self.activity_title,size='body',bold=True)
-  self.activity_title_label.pack(fill='x')
+  self.status_external=status_parent is not None
+  self.activity_header=tk.Frame(status_parent if self.status_external else self.frame,bg=THEME['bg'])
+  self.activity_header.columnconfigure(1,weight=1)
+  self.status_dot=self._label(self.activity_header,'●','caption',color=THEME['muted']);self.status_dot.grid(row=0,column=0,padx=(0,round(8*self.scale)))
+  self.gpu_observation=tk.StringVar(value='GPU observation unavailable');self.comfy_observation=tk.StringVar(value='ComfyUI state unavailable')
+  self.activity_marks=tk.Frame(self.activity_header,bg=THEME['bg'])
+  self.gpu_mark=StatusMark(self.activity_marks,self.gpu_observation,text='▣ —');self.gpu_mark.pack(side='left')
+  self.comfy_mark=StatusMark(self.activity_marks,self.comfy_observation,text='')
+  self.activity_title_label=self._label(self.activity_header,variable=self.activity_title,size='caption' if self.status_external else 'body',bold=True)
+  self.activity_title_label.grid(row=0,column=1,sticky='ew')
   self.activity_note_label=self._label(self.activity_header,variable=self.activity_note,size='caption',color=THEME['muted'])
-  self.activity_note_label.pack(fill='x',pady=(2,0))
-  self.activity_header.bind('<Configure>',lambda event:[label.configure(wraplength=max(80,event.width)) for label in (self.activity_title_label,self.activity_note_label)])
+  self.activity_header.bind('<Configure>',lambda event:self._fit_activity_header())
+  # Keep the full observation for Diagnostics and assistive hover text.
+  self.activity_tip=StatusMark(self.activity_header,self.activity_note,text='')
+  self.activity_tip.anchor_widget=self.activity_title_label
+  self.activity_title_label.bind('<Enter>',self.activity_tip.show_tip)
+  self.activity_title_label.bind('<Leave>',self.activity_tip.hide_tip)
   if compact:
    self.gpu_meter=Meter(self.frame,style='Memory.Horizontal.TProgressbar')
    row=tk.Frame(self.frame,bg=THEME['bg']);row.pack(fill='x',pady=(0,3))
@@ -216,6 +302,7 @@ class PerformancePanel:
    self._label(speed_row,'Output speed','body',color=THEME['muted']).pack(side='left')
    self._label(speed_row,variable=self.speed,size='metric',bold=True).pack(side='right')
    self._label(self.frame,variable=self.speed_note,size='caption',color=THEME['muted']).pack(anchor='e',pady=(2,0))
+   self.gpu_tuning=GpuTuningPanel(self.frame,compact=True)
    self.technical_body=None;self.details_expanded=False
    return
   self.warning_label=self._label(self.frame,variable=self.warning,size='body',color=THEME['warning'],wrap=round(690*self.scale))
@@ -233,15 +320,15 @@ class PerformancePanel:
    if col<2:overview.columnconfigure(col*2+1,minsize=round(20*self.scale))
    self._label(group,title,'body',bold=True).pack(anchor='w',pady=(0,6))
   throughput,memory,requests=groups
+  self.source_marks={}
   for title,key,var in (('Output','speed',self.speed),('Prompt','prompt_speed',self.prompt_speed)):
    row=tk.Frame(throughput,bg=THEME['bg']);row.pack(fill='x',pady=(0,5))
    self._label(row,title,'caption',color=THEME['muted']).pack(side='left')
+   mark=StatusMark(row,self.speed_note if key=='speed' else self.prompt_note,text='—');mark.pack(side='left',padx=(4,0));self.source_marks[key]=mark
    label=self._label(row,variable=var,size='metric',bold=True);label.pack(side='right');self.metric_widgets[key]=label
    if key=='prompt_speed':
     self.prompt_trend=RequestTrend(row,self.scale,THEME['chart_output']);self.prompt_trend.pack(side='left',fill='x',expand=True,padx=6)
   self.throughput_source=tk.StringVar(value='No completed request')
-  source_label=self._label(throughput,variable=self.throughput_source,size='caption',color=THEME['muted']);source_label.pack(anchor='w')
-  throughput.bind('<Configure>',lambda event:source_label.configure(wraplength=event.width))
   for title,key,var in (('GPU','gpu_memory',self.gpu_memory),('RAM','ram_memory',self.ram_memory)):
    group=tk.Frame(memory,bg=THEME['bg']);group.pack(fill='x',pady=(0,8))
    row=tk.Frame(group,bg=THEME['bg']);row.pack(fill='x')
@@ -273,21 +360,24 @@ class PerformancePanel:
    plot=tk.Canvas(group,height=round(60*self.scale),bg=THEME['bg'],highlightthickness=0)
    plot.pack(fill='both',expand=True);plot.bind('<Configure>',lambda event:self.draw());self.plots[key]=plot
   self.charts.rowconfigure(0,weight=1);self.graph=self.plots['output']
+  self.gpu_tuning=GpuTuningPanel(self.frame)
   self.context_summary=tk.StringVar(value='Context · waiting for model telemetry')
-  context_header=tk.Frame(self.frame,bg=THEME['bg']);context_header.pack(fill='x',pady=(9,0))
+  context_header=tk.Frame(self.frame,bg=THEME['bg']);self.context_header=context_header;context_header.pack(fill='x',pady=(9,0))
   self._label(context_header,variable=self.context_summary,size='caption',color=THEME['muted']).pack(side='left')
-  self.environment=tk.StringVar(value='');self._label(context_header,variable=self.environment,size='caption',color=THEME['muted']).pack(side='right')
   self.context_graph=tk.Canvas(self.frame,height=round(42*self.scale),bg=THEME['bg'],highlightthickness=0)
   self.context_graph.pack(fill='x');self.context_graph.bind('<Configure>',lambda event:self.draw_context())
   self.details_expanded=False
   self.details_button=Button(self.frame,text='Request activity & details  ▾',command=self.toggle_details,quiet=True)
-  self.details_button.pack(anchor='w',pady=(4,0))
+  self.details_button.pack(anchor='center',pady=(round(8*self.scale),0))
   self.detail_container=tk.Frame(self.frame,bg=THEME['bg'])
   # Details stay a bounded workspace: switching tabs never grows the dashboard.
   style=ttk.Style(parent)
-  style.configure('Valet.TNotebook',background=THEME['bg'],borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],tabmargins=(0,0,0,6))
-  style.configure('Valet.TNotebook.Tab',background=THEME['bg'],foreground=THEME['muted'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],padding=(12,6),font=ui_font('caption'))
-  style.map('Valet.TNotebook.Tab',background=[('selected',THEME['selected']),('active',THEME['raised'])],foreground=[('selected',THEME['text'])],bordercolor=[('selected',THEME['bg'])],lightcolor=[('selected',THEME['bg'])],darkcolor=[('selected',THEME['bg'])])
+  style.configure('Valet.TNotebook',background=THEME['bg'],borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],tabposition='n',tabmargins=(0,0,0,round(8*self.scale)))
+  tab_padding=(round(16*self.scale),round(8*self.scale))
+  style.configure('Valet.TNotebook.Tab',background=THEME['bg'],foreground=THEME['muted'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],padding=tab_padding,font=ui_font('caption'),anchor='center',width=12)
+  # Clam's inherited selected padding is asymmetric (6,4,6,2), which
+  # moves the active label below its neighbours even with a base padding.
+  style.map('Valet.TNotebook.Tab',padding=[('selected',tab_padding),('!selected',tab_padding)],expand=[('selected',(0,0,0,0))],background=[('selected',THEME['selected']),('active',THEME['raised'])],foreground=[('selected',THEME['text'])],bordercolor=[('selected',THEME['bg'])],lightcolor=[('selected',THEME['bg'])],darkcolor=[('selected',THEME['bg'])])
   style.configure('Valet.Treeview',background=THEME['card'],fieldbackground=THEME['card'],foreground=THEME['text'],font=ui_font('caption'),rowheight=round(24*self.scale),borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
   style.configure('Valet.Treeview.Heading',background=THEME['raised'],foreground=THEME['muted'],font=ui_font('caption'),relief='flat',bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
   style.map('Valet.Treeview',background=[('selected',THEME['selected'])],foreground=[('selected',THEME['text'])])
@@ -296,7 +386,7 @@ class PerformancePanel:
   self.details_notebook.pack(fill='x')
   self.detail_tabs={};self.detail_tables=[]
   for title in ('Requests','Engine','Diagnostics'):
-   tab=tk.Frame(self.details_notebook,bg=THEME['bg'],padx=round(5*self.scale),pady=round(5*self.scale))
+   tab=tk.Frame(self.details_notebook,bg=THEME['bg'],padx=round(8*self.scale),pady=round(8*self.scale))
    self.details_notebook.add(tab,text=title);self.detail_tabs[title]=tab
   self.details_notebook.enable_traversal()
   self.details_notebook.select(self.detail_tabs['Engine'])
@@ -313,7 +403,7 @@ class PerformancePanel:
   self._label(engine_header,variable=self.engine_settings_note,size='caption',color=THEME['muted']).pack(side='left')
   self.edit_engine_button=Button(engine_header,text='Edit selected profile',quiet=True,command=lambda:self.on_edit_engine())
   self.edit_engine_button.pack(side='right')
-  self.engine_table=self._table(self.detail_tabs['Engine'],(('setting','Setting',210),('value','Value',270),('source','Source',145)),9)
+  self.engine_table=self._table(self.detail_tabs['Engine'],(('setting','Setting',210),('value','Value',270),('source','Source',145)),8)
   self.engine_table.tag_configure('group',foreground=THEME['muted'],font=ui_font('caption',True))
   self.engine_table.bind('<Configure>',lambda event:self._fit_engine_values())
   self.engine_table.bind('<Motion>',self._engine_hover)
@@ -337,7 +427,7 @@ class PerformancePanel:
 
  def _detail_pairs(self,parent,pairs):
   for index,(title,key) in enumerate(pairs):
-   col=index%2;row=tk.Frame(parent,bg=THEME['bg']);row.grid(row=index//2,column=col,sticky='ew',padx=(0,round(16*self.scale)) if not col else 0,pady=2)
+   col=index%2;row=tk.Frame(parent,bg=THEME['bg']);row.grid(row=index//2,column=col,sticky='ew',padx=(0,round(16*self.scale)) if not col else 0,pady=round(2*self.scale))
    parent.columnconfigure(col,weight=1,uniform='details')
    self._label(row,title,'caption',color=THEME['muted']).pack(side='left')
    self._label(row,variable=self.details[key],size='caption').pack(side='right')
@@ -347,7 +437,8 @@ class PerformancePanel:
   holder=tk.Frame(parent,bg=THEME['bg']);holder.pack(fill='x')
   table=ttk.Treeview(holder,columns=[key for key,_,_ in columns],show='headings',height=height,style='Valet.Treeview',selectmode='browse',takefocus=True)
   for key,title,width in columns:
-   table.heading(key,text=title,anchor='w');table.column(key,width=round(width*self.scale),minwidth=round(45*self.scale),anchor='w',stretch=True)
+   alignment='e' if key in ('tokens','duration','pid','memory') else 'center' if key=='time' else 'w'
+   table.heading(key,text=title,anchor=alignment);table.column(key,width=round(width*self.scale),minwidth=round(45*self.scale),anchor=alignment,stretch=True)
   table.pack(fill='x',expand=True)
   self.detail_tables.append(table)
   # A local tag runs before widget/Treeview/window bindings. Always consume wheel
@@ -450,7 +541,7 @@ class PerformancePanel:
    tip.configure(bg=THEME['line'])
    tk.Label(tip,text=raw,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),padx=8,pady=5,wraplength=round(480*self.scale),justify='left').pack(padx=1,pady=1)
    tip.update_idletasks();x=min(event.x_root+12,tip.winfo_screenwidth()-tip.winfo_reqwidth()-10);y=min(event.y_root+18,tip.winfo_screenheight()-tip.winfo_reqheight()-10)
-   tip.geometry(f'+{max(0,x)}+{max(0,y)}');tip.deiconify()
+   tip.geometry(f'+{max(0,x)}+{max(0,y)}');reveal_tooltip(tip,table)
   self.engine_tip_after=self.frame.after(450,show)
 
  def _label(self,parent,text='',size='body',bold=False,color=None,variable=None,wrap=0):
@@ -471,6 +562,15 @@ class PerformancePanel:
   self.frame.after_idle(lambda:self.on_details(self.details_expanded))
   self.frame.after_idle(self.on_layout)
 
+ def _fit_activity_header(self):
+  header=self.activity_header;width=header.winfo_width()
+  title_width=int(header.tk.call('font','measure',self.activity_title_label.cget('font'),self.activity_title.get()))
+  gap=round(12*self.scale);dot_width=self.status_dot.winfo_reqwidth()+round(8*self.scale)
+  marks_width=self.activity_marks.winfo_reqwidth()
+  stacked=title_width+dot_width+marks_width+gap>width
+  self.activity_marks.grid(row=1 if stacked else 0,column=1 if stacked else 2,columnspan=2 if stacked else 1,sticky='w' if stacked else 'e',padx=0 if stacked else (gap,0),pady=(round(4*self.scale),0) if stacked else 0)
+  self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
+
  def update_activity(self,activity):
   if not activity:
    self.activity_header.pack_forget()
@@ -485,17 +585,26 @@ class PerformancePanel:
   gpu=str(activity.get('gpu_note') or '')
   blockers=[str(item) for item in activity.get('blockers') or []]
   comfy=activity.get('comfy') or {}
-  summary_detail=detail if activity.get('state') not in ('ready','reading','generating') else ''
-  self.activity_title.set('Strata · '+title+(' · '+summary_detail if summary_detail else ''))
-  # Short summaries stay visible; exact observations live in the expansion.
-  note=blockers[0] if blockers and blockers[0] not in detail else gpu or 'GPU observation unavailable'
-  if comfy and comfy.get('state') not in ('unconfigured','not_configured'):
-   note+=' · ComfyUI: '+str(comfy.get('title') or 'State unavailable')
-  self.activity_note.set(note)
+  self.activity_title.set('Strata · '+title)
+  # Each tooltip explains its own indicator; avoid repeating neighboring badges.
+  notes=[detail] if detail and activity.get('state') not in ('ready','reading','generating') and detail.casefold()!=title.casefold() else []
+  for blocker in blockers:
+   if blocker and not any(blocker.casefold() in part.casefold() for part in notes):notes.append(blocker)
+  self.activity_note.set('\n'.join(notes))
+  count=number(activity.get('gpu_process_count'))
+  self.gpu_observation.set(f'{int(count)} other GPU process'+('es' if count!=1 else '') if count is not None else 'GPU process count unavailable')
+  self.gpu_mark.configure(text='▣ '+(str(int(count)) if count is not None else '—'))
+  self.comfy_observation.set(str(comfy.get('detail') or comfy.get('title') or 'Status unavailable'))
+  self.comfy_mark.configure(text='Comfy '+{'busy':'▶','idle':'✓','ready':'✓'}.get(comfy.get('state'),'—'),fg=THEME['success'] if comfy.get('state')=='busy' else THEME['muted'])
+  if comfy.get('state') in ('busy','idle','ready'):self.comfy_mark.pack(side='left',padx=(round(12*self.scale),0))
+  else:self.comfy_mark.pack_forget()
+  self.status_dot.configure(fg=THEME['success'] if activity.get('state') in ('ready','reading','generating') else THEME['warning'] if activity.get('state') in ('blocked','stale','error') else THEME['muted'])
   self.activity_title_label.configure(fg=THEME['error'] if activity.get('state')=='error' else THEME['warning'] if activity.get('state') in ('unavailable','stale','blocked') else THEME['text'])
   children=[child for child in self.frame.pack_slaves() if child!=self.activity_header]
-  if children:self.activity_header.pack(fill='x',pady=(0,8),before=children[0])
+  if self.status_external:self.activity_header.pack(fill='x',expand=True)
+  elif children:self.activity_header.pack(fill='x',pady=(0,8),before=children[0])
   else:self.activity_header.pack(fill='x',pady=(0,8))
+  self._fit_activity_header()
   if self.compact:return
   self.gpu_summary.set(gpu or 'GPU observation unavailable')
   self.blocker_summary.set('\n'.join(blockers[:2])+ (f' · {len(blockers)-2} more in backend status' if len(blockers)>2 else '') if blockers else 'No confirmed resource blockers reported')
@@ -526,12 +635,18 @@ class PerformancePanel:
   self.activity_title.set('Status unavailable')
   self.activity_note.set('Last reading is stale · checking again')
   self.activity_title_label.configure(fg=THEME['warning'])
+  self.status_dot.configure(fg=THEME['warning'])
+  self.gpu_mark.configure(text='▣ —');self.comfy_mark.pack_forget()
+  self.gpu_observation.set('GPU observation is stale');self.comfy_observation.set('ComfyUI observation is stale')
+  self.gpu_tuning.mark_stale()
   self.latest={**self.latest,'running':None,'queued':None,'live_speed':None,'prefill_speed':None}
   self.speed.set(fmt(self.latest.get('last_speed'),' tok/s'))
   self.speed_note.set('Last completed request · reading is stale' if number(self.latest.get('last_speed')) is not None else 'Live output unavailable')
   if self.compact:return
   self.prompt_speed.set(fmt(self.latest.get('last_prefill'),' tok/s',0))
   self.throughput_source.set('Last completed request · reading is stale')
+  self.prompt_note.set('Last completed request · reading is stale')
+  for mark in self.source_marks.values():mark.configure(text='◷ stale',fg=THEME['muted'])
   self.requests.set('— active');self.requests_note.set('— waiting')
   self.plot_values['output'].set('—');self.plot_values['gpu'].set('—');self.plot_values['cpu'].set('—')
   self.context_summary.set('Context · reading is stale')
@@ -548,6 +663,10 @@ class PerformancePanel:
   if not self.samples or self.samples[-1][0]!=now:self.samples.append((now,number(s.get('live_speed'))))
   while self.samples and now-self.samples[0][0]>60:self.samples.popleft()
   h=s.get('hardware') or {}
+  if self.gpu_tuning.update_values(h,s.get('power_stats') or {}):
+   if self.compact:self.gpu_tuning.pack(fill='x',pady=(round(8*self.scale),0))
+   else:self.gpu_tuning.pack(fill='x',pady=(round(8*self.scale),0),before=self.context_header)
+  else:self.gpu_tuning.pack_forget()
   if not self.history or self.history[-1]['time']!=now:self.history.append(dict(time=now,output=number(s.get('live_speed')),gpu=number(h.get('gpu_util')),cpu=number(h.get('cpu'))))
   while self.history and now-self.history[0]['time']>60:self.history.popleft()
   used=h.get('gpu_mem_used');total=h.get('gpu_mem_total')
@@ -571,6 +690,10 @@ class PerformancePanel:
   prompt=s.get('prefill_speed');last_prompt=s.get('last_prefill')
   self.prompt_speed.set(fmt(prompt if number(prompt) is not None else last_prompt,' tok/s',0))
   self.prompt_note.set('Live prompt processing' if number(prompt) is not None else last_note if number(last_prompt) is not None else 'No completed request')
+  for key,live,last in (('speed',speed,last_speed),('prompt_speed',prompt,last_prompt)):
+   is_live=number(live) is not None
+   short_age=age_text.replace(' ago','') if age is not None else ''
+   self.source_marks[key].configure(text='▶' if is_live else '◷ '+short_age if number(last) is not None else '—',fg=THEME['success'] if is_live else THEME['muted'])
   sources=list(dict.fromkeys((self.speed_note.get(),self.prompt_note.get())))
   self.throughput_source.set(sources[0] if len(sources)==1 else 'Output: '+sources[0]+' · Prompt: '+sources[1])
   ttft=number(s.get('ttft_ms'))
@@ -589,8 +712,6 @@ class PerformancePanel:
   self.requests_note.set(f"{fmt(s.get('queued'),digits=0)} waiting")
   self.plot_values['output'].set(fmt(speed,' tok/s'))
   self.plot_values['gpu'].set(fmt(h.get('gpu_util'),'%',0));self.plot_values['cpu'].set(fmt(h.get('cpu'),'%',0))
-  self.environment.set(' · '.join(value for value in (fmt(h.get('gpu_temp'),' °C',0) if number(h.get('gpu_temp')) is not None else '',fmt(h.get('gpu_power'),' W',0) if number(h.get('gpu_power')) is not None else '') if value))
-  if self.environment.get():self.environment.set('GPU · '+self.environment.get())
   self.context_summary.set('Context · per agent' if s.get('slots') else 'Context · live occupancy unavailable')
   self.context_graph.configure(height=round(42*self.scale) if s.get('slots') else 0)
   warnings=[]
