@@ -54,4 +54,31 @@ class EfficiencyTests(unittest.TestCase):
                 self.assertEqual(event[0],'snapshot');self.assertEqual(event[1][2],{})
         finally:app.quit()
 
+    def test_hidden_connected_backend_uses_slow_heartbeat(self):
+        app=a.LauncherUI(enable_tray=False,observe=False);app.hide()
+        try:
+            app.latest_performance={'identity':((123,100.0),)}
+            with patch.object(app.telemetry_worker,'submit'),patch.object(app.window,'after',return_value='timer') as after:
+                app.refresh()
+                after.assert_called_once_with(10000,app.refresh)
+        finally:
+            app.refresh_timer=None;app.quit()
+
+    def test_visible_dashboard_keeps_fast_refresh(self):
+        app=a.LauncherUI(enable_tray=False,observe=False)
+        try:
+            with patch.object(app.telemetry_worker,'submit'),patch.object(app.window,'after',return_value='timer') as after:
+                app.refresh()
+                after.assert_called_once_with(2000,app.refresh)
+        finally:
+            app.refresh_timer=None;app.quit()
+
+    def test_hidden_context_menu_does_not_refresh_or_fit(self):
+        app=a.LauncherUI(enable_tray=False,observe=False);app.hide()
+        try:
+            menu=Mock();menu.window.state.return_value='withdrawn';app.tray_context=menu
+            app.update_controls()
+            menu.refresh.assert_not_called()
+        finally:app.quit()
+
 if __name__=='__main__':unittest.main()

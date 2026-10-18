@@ -904,7 +904,8 @@ class LauncherUI:
      profile=(None,'Telemetry unavailable; retrying.')
     self.events.put(('snapshot',(epoch,profile,reading)))
    self.telemetry_worker.submit(sample)
-  self.refresh_timer=self.window.after(2000 if visible or self.latest_performance.get('identity') else 10000,self.refresh)
+  # Hidden status needs only a heartbeat; a live backend does not make graphs visible.
+  self.refresh_timer=self.window.after(2000 if visible else 10000,self.refresh)
 
 def gui(stop=False,check=False,hidden=False):
  if check:
