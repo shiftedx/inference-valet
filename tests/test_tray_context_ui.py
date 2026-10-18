@@ -60,7 +60,7 @@ class ContextUITests(unittest.TestCase):
                 busy[0]=True;menu.refresh();menu.invoke(row)
                 self.assertEqual(calls,[])
                 self.assertEqual(menu.buttons[0].cget('state'),'disabled')
-                with patch.object(menu.window,'focus_displayof',return_value=root):menu.dismiss_outside()
+                with patch.object(menu,'focus_inside',return_value=False):menu.dismiss_outside()
                 self.assertEqual(menu.window.state(),'withdrawn')
                 self.assertIsNone(menu.pending)
         finally:root.destroy()

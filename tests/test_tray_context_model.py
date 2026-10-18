@@ -3,16 +3,33 @@ import importlib.util
 import pathlib
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch,Mock
+from types import SimpleNamespace
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
-from ai_tray_menu import MenuItem,menu_bounds
+from ai_tray_menu import MenuItem,menu_bounds,TrayContextMenu,fit_menu_label
 spec=importlib.util.spec_from_file_location('context_model_launcher',ROOT/'ai-launcher.py')
 launcher=importlib.util.module_from_spec(spec);spec.loader.exec_module(launcher)
 
 
 class ContextModelTests(unittest.TestCase):
+    def test_long_model_names_keep_agent_count_and_context_distinguishable(self):
+        label='✓ A very long user chosen model name · 4 agents · 128K each'
+        caption=fit_menu_label(label,len,36)
+        self.assertLessEqual(len(caption),36)
+        self.assertTrue(caption.startswith('✓'))
+        self.assertTrue(caption.endswith('4 agents · 128K each'))
+        self.assertIn('…',caption)
+
+    def test_native_popdown_focus_paths_do_not_require_python_widgets(self):
+        menu=TrayContextMenu.__new__(TrayContextMenu)
+        call=Mock();menu.window=SimpleNamespace(_w='.menu',tk=SimpleNamespace(call=call))
+        for path,inside in (('.menu',True),('.menu.!button',True),('',False),
+                            ('.menu-other.!button',False),('.main.combo.popdown.f.l',False)):
+            call.return_value=path
+            self.assertEqual(menu.focus_inside(),inside)
+
     def test_profile_actions_recheck_busy_and_keep_their_own_key(self):
         sent=[];busy=[False];current=['two'];auto=[True]
         with patch.object(launcher,'PROFILES',{'one':{},'two':{}}),patch.object(launcher,'PROFILE_NAMES',{'one':'First','two':'Second'}):

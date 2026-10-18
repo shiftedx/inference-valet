@@ -31,6 +31,15 @@ def menu_bounds(anchor, size, work, margin=8):
             max(top+margin, min(anchor[1]-height, bottom-margin-height)))
 
 
+def fit_menu_label(label, measure, width):
+    if measure(label)<=width:return label
+    parts = label.rsplit(' · ', 2)
+    head, tail = (parts[0], ' · '+' · '.join(parts[1:])) if len(parts)==3 else (label, '')
+    if measure('…'+tail)>width:head, tail = label, ''
+    while head and measure(head.rstrip()+'…'+tail)>width:head = head[:-1]
+    return head.rstrip()+'…'+tail
+
+
 def anchor_work_area(anchor, owner):
     import ctypes
     from ctypes import wintypes
@@ -74,6 +83,7 @@ class TrayContextMenu:
         self.window.bind('<Left>', lambda event:self.back() if self.page else 'break')
         self.window.bind('<Right>', self.open_focused)
         self.window.bind('<FocusOut>', self.defer_dismiss)
+        self.window.bind('<Destroy>', self.cleanup)
         self.window.bind('<MouseWheel>', self.scroll)
 
     def show(self, anchor):
@@ -115,9 +125,8 @@ class TrayContextMenu:
         font = tkfont.Font(root=self.window, font=ui_font())
         available = max(1, width-round(48*self.factor)-(self.scrollbar.winfo_reqwidth() if overflow else 0))
         for item, button in zip(self.rows, self.buttons):
-            label = button.cget('text')
-            full = label
-            while len(label)>1 and font.measure(label)>available:label = label[:-2]+'…'
+            full = button.cget('text')
+            label = fit_menu_label(full, font.measure, available)
             button.configure(text=label)
             if label!=full and not hasattr(button,'tooltip'):Tooltip(button, item.label)
 
@@ -171,8 +180,17 @@ class TrayContextMenu:
 
     def dismiss_outside(self):
         self.pending = None
-        focus = self.window.focus_displayof()
-        if focus is None or focus.winfo_toplevel()!=self.window:self.hide()
+        if not self.focus_inside():self.hide()
+
+    def focus_inside(self):
+        # Native combobox popdowns have Tcl paths without Python widgets.
+        # Inspect the path directly so outside focus always dismisses the menu.
+        focus = str(self.window.tk.call('focus', '-displayof', self.window._w))
+        return focus == self.window._w or focus.startswith(self.window._w+'.')
+
+    def cleanup(self, event):
+        if event.widget==self.window and self.pending:
+            self.window.after_cancel(self.pending);self.pending = None
 
     def hide(self):
         if self.pending:self.window.after_cancel(self.pending);self.pending = None
