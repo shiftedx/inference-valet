@@ -1,6 +1,9 @@
-param([switch]$StartNow)
+param([switch]$StartNow, [switch]$ReplaceExisting)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'install-support.ps1')
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$existing = Get-ValetTask
+if ($existing -and -not (Test-ValetTask $existing $repoRoot) -and -not $ReplaceExisting) { throw 'Startup belongs to another checkout. Use -ReplaceExisting to migrate it intentionally.' }
 $pythonw = Join-Path $repoRoot '.venv\Scripts\pythonw.exe'
 if (-not (Test-Path -LiteralPath $pythonw)) { throw 'Run scripts\setup.ps1 first.' }
 $taskUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name

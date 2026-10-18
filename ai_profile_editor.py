@@ -2,7 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ai_branding import apply_window_icon
-from ai_widgets import THEME, Button, ProfileSelect, TextField, Tooltip, scale, ui_font
+from ai_widgets import THEME, Button, ProfileSelect, TextField, Tooltip, scale, ui_font, monitor_work_area
 
 class ProfileEditor:
     def __init__(self, parent, store, key, on_save, style_window, initial_page='Profile'):
@@ -27,7 +27,18 @@ class ProfileEditor:
             tabs.columnconfigure(index,weight=1,uniform='editor_tabs')
             button.grid(row=0,column=index,sticky='ew',padx=round(2*self.factor));self.tab_buttons[name]=button
         tk.Frame(body,bg=THEME['line'],height=1).pack(fill='x',pady=(round(8*self.factor),round(12*self.factor)))
-        content=tk.Frame(body,bg=THEME['bg']);content.pack(fill='both',expand=True)
+        viewport=tk.Frame(body,bg=THEME['bg']);viewport.pack(fill='both',expand=True)
+        self.scrollbar=ttk.Scrollbar(viewport,orient='vertical')
+        self.canvas=tk.Canvas(viewport,bg=THEME['bg'],bd=0,highlightthickness=0,
+                              yscrollcommand=self.scrollbar.set)
+        self.canvas.pack(side='left',fill='both',expand=True)
+        self.scrollbar.configure(command=self.canvas.yview)
+        content=tk.Frame(self.canvas,bg=THEME['bg'])
+        self.content_window=self.canvas.create_window(0,0,window=content,anchor='nw')
+        self.canvas.bind('<Configure>',lambda event:self.canvas.itemconfigure(self.content_window,width=event.width))
+        content.bind('<Configure>',lambda event:self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.window.bind('<MouseWheel>',self._scroll,add='+')
+        self.window.bind('<FocusIn>',self._reveal_focus,add='+')
         for name in ('Profile','Memory','Engine'):
             self.pages[name]=tk.Frame(content,bg=THEME['bg'])
         self.pages['Profile'].columnconfigure(0,weight=1)
@@ -55,24 +66,56 @@ class ProfileEditor:
             ('spec_min','Draft minimum probability','0–1'),('pcie','PCIe fraction','0–1 · blank keeps the default')):
             self.field('Engine',key,label,hint=hint)
         # The footer stays outside the pages so validation and Save remain visible.
-        tk.Label(body,textvariable=self.error,bg=THEME['bg'],fg=THEME['error'],font=ui_font('caption'),
-                 wraplength=round(560*self.factor),anchor='w',justify='left').pack(fill='x',pady=(round(8*self.factor),round(4*self.factor)))
-        footer=tk.Frame(body,bg=THEME['bg']);footer.pack(fill='x')
+        error_label=tk.Label(body,textvariable=self.error,bg=THEME['bg'],fg=THEME['error'],font=ui_font('caption'),
+                 wraplength=round(560*self.factor),anchor='w',justify='left')
+        footer=tk.Frame(body,bg=THEME['bg']);footer.pack(side='bottom',fill='x')
         self.save_button=Button(footer,text='Save for next load',primary=True,command=self.save);self.save_button.pack(side='right')
         Button(footer,text='Cancel',command=self.close,quiet=True).pack(side='right',padx=(0,round(8*self.factor)))
+        error_label.pack(side='bottom',fill='x',pady=(round(8*self.factor),round(4*self.factor)))
+        viewport.pack_forget();viewport.pack(fill='both',expand=True)
         self.select_page('Profile')
+        self.window.update_idletasks()
+        page_height=max(page.winfo_reqheight() for page in self.pages.values())
+        self.canvas.configure(height=page_height)
         self.window.update_idletasks()
         # Reserve enough height for either tab; selecting Engine never resizes the dialog.
         height=max(page.winfo_reqheight() for page in self.pages.values())+body.winfo_reqheight()-self.pages['Profile'].winfo_reqheight()+round(36*self.factor)
         width=round(620*self.factor)
+        left,top,right,bottom=monitor_work_area(parent)
+        available_height=max(1,bottom-top-round(48*self.factor))
+        if height>available_height:
+            height=available_height;self.scrollbar.pack(side='right',fill='y')
+        width=min(width,max(1,right-left-round(24*self.factor)))
         self.window.geometry(f'{width}x{height}')
-        self.window.resizable(True,False);self.window.minsize(round(520*self.factor),height)
+        self.window.resizable(True,False);self.window.minsize(min(round(520*self.factor),width),height)
         self.window.update_idletasks()
         x=parent.winfo_rootx()+(parent.winfo_width()-width)//2;y=parent.winfo_rooty()+round(32*self.factor)
-        self.window.geometry(f'+{max(0,x)}+{max(0,min(y,parent.winfo_screenheight()-height-60))}')
+        x=max(left,min(x,right-width));y=max(top,min(y,bottom-height-round(40*self.factor)))
+        self.window.geometry(f'+{x}+{y}')
         self.select_page(initial_page if initial_page in self.pages else 'Profile')
         style_window(self.window);self.window.lift()
         self.fields['ple_io' if self.page=='Memory' else 'prefill' if self.page=='Engine' else 'name'].focus_set()
+
+    def _scroll(self,event):
+        # Preserve wheel behavior in selectors; scroll only the settings viewport.
+        widget=event.widget
+        if isinstance(widget,ttk.Combobox):return
+        while widget is not None and widget!=self.canvas:
+            widget=getattr(widget,'master',None)
+        if widget==self.canvas and self.canvas.yview()!=(0.0,1.0):
+            self.canvas.yview_scroll(-1 if event.delta>0 else 1,'units');return 'break'
+
+    def _reveal_focus(self,event):
+        if event.widget not in self.fields.values():return
+        self.window.update_idletasks()
+        field=event.widget;top=field.winfo_rooty()-self.canvas.winfo_rooty()
+        bottom=top+field.winfo_height();height=self.canvas.winfo_height()
+        offset=self.canvas.canvasy(0)
+        if top<0:offset+=top
+        elif bottom>height:offset+=bottom-height
+        else:return
+        region=self.canvas.bbox('all')
+        if region and region[3]:self.canvas.yview_moveto(max(0,offset)/region[3])
 
     def field(self,page,key,label,choices=None,hint=''):
         frame=self.pages[page]
@@ -116,6 +159,7 @@ class ProfileEditor:
             page.pack_forget()
             self.tab_buttons[key].set_selected(key==name)
         self.pages[name].pack(fill='both',expand=True)
+        self.canvas.yview_moveto(0)
         self.page=name
 
     def save(self):

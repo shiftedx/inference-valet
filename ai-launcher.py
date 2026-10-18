@@ -347,10 +347,6 @@ class LauncherUI:
   self.stop_button=Button(actions,text='Unload model',command=lambda:self.begin('stop'));self.stop_button.pack(side='left',padx=(6,0))
   self.control_tooltips(self.picker,self.start_button,self.stop_button)
   Tooltip(self.edit_button,'Changes apply on the next model load.')
-  self.attention_row=tk.Frame(hero,bg=THEME['bg'])
-  self.state_dot=self._text(self.attention_row,'●','caption',color=THEME['warning']);self.state_dot.pack(side='left',padx=(0,5))
-  self.state_label=self._text(self.attention_row,variable=self.hero_state,size='caption',bold=True);self.state_label.pack(side='left',padx=(0,8))
-  self.note_label=self._text(self.attention_row,variable=self.hero_note,size='caption',color=THEME['muted']);self.note_label.pack(side='left',fill='x',expand=True)
   self.model_divider=tk.Frame(hero,bg=THEME['line'],height=1);self.model_divider.pack(fill='x',pady=(10,8))
   auto_row=tk.Frame(hero,bg=hero.cget('bg'));auto_row.pack(fill='x')
   self.auto_explanation=tk.StringVar(value='')
@@ -372,9 +368,6 @@ class LauncherUI:
    self.performance.on_layout=fit_dashboard
    self.performance.on_edit_engine=lambda:self.edit_profile(initial_page='Memory')
    self.performance.pack(fill='both',expand=True)
-  def wrap_hero(event):
-   self.note_label.configure(wraplength=max(180,event.width-self.state_label.winfo_reqwidth()-24))
-  hero.bind('<Configure>',wrap_hero,add='+')
   self._bind_scroll_region(frame,canvas)
   if self.performance:self.performance.on_details=self.resize_details
   self.details_geometry=None
@@ -660,14 +653,14 @@ class LauncherUI:
   elif 'stop' in self.active:title='Unloading model…';profile='';note='GPU memory will be freed.'
   elif status.startswith('Action failed:'):title='Action failed';profile='';note=status.removeprefix('Action failed: ')
   elif any(word in status for word in ('VRAM headroom','Strata load failed','Insufficient RAM','Resource state unknown','API recovery paused','API unavailable')):title='Strata needs attention';profile='';note=status
+  elif status.startswith('Gaming busy:'):title='Gaming priority';profile='';note=status.removeprefix('Gaming busy:').strip() or 'New inference is paused while your game is running.'
+  elif status.startswith('Game state unknown:'):title='Game status unavailable';profile='';note='New inference is paused until game activity can be checked.'
   elif self.current in PROFILE_NAMES:
    title='Ready';profile=PROFILE_NAMES[self.current];note='Your model is loaded and available.'
   elif status.startswith('Running: '):title='Model running';profile=status.removeprefix('Running: ');note='The active model is available.'
   elif status.startswith('Checking model'):title='Checking model…';profile='';note='Reading the current model state.'
   elif 'loading' in status.lower():title='Loading model…';profile='';note='Checking the model server.'
   elif 'unavailable' in status.lower():title='Status unavailable';profile='';note='Retrying the model status check.'
-  elif status.startswith('Gaming busy:'):title='Gaming priority';profile='';note=status.removeprefix('Gaming busy:').strip() or 'New inference is paused while your game is running.'
-  elif status.startswith('Game state unknown:'):title='Game status unavailable';profile='';note='New inference is paused until game activity can be checked.'
   elif status.startswith('Waiting for request'):title='Waiting for request';profile='';note='The next request loads Strata when the GPU is available.'
   elif not self.auto_enabled:title='Restore paused';profile='No model loaded';note='Load a model whenever you need it.'
   else:
@@ -677,19 +670,30 @@ class LauncherUI:
    note=explanation if remembered in PROFILE_NAMES else 'Choose a profile to load it.'
   reading=self.latest_performance
   activity=reading.get('activity') or {}
-  if activity and not self.active and not status.startswith('Action failed:'):
-   if time.monotonic()-reading.get('sampled',0)>15:
+  fresh=time.monotonic()-reading.get('sampled',0)<=15
+  controller_attention=title in ('Action failed','Strata needs attention','Gaming priority','Game status unavailable')
+  if activity and not self.active and not controller_attention:
+   if not fresh:
     title='Status unavailable';note='Last reading is stale · checking again'
    else:
     title=activity['title'];note=activity.get('detail','')
   fallback='Choose a model' if title=='No model loaded' else 'Model unavailable' if title in ('Action failed','Strata needs attention','Status unavailable') else 'Local model'
   self.hero_state.set(title);self.hero_profile.set(profile or fallback);self.hero_note.set(note)
-  color=THEME['success'] if title in ('Ready','Model running') else THEME['warning'] if any(word in title.lower() for word in ('failed','attention','unavailable','priority')) else THEME['info']
-  self.state_dot.configure(fg=color);self.state_label.configure(fg=color)
-  if 'blocked:' in reason and title in ('Ready','Model running','No model loaded','Waiting for request'):
-   self.hero_state.set('Game priority');self.hero_note.set(reason.split('blocked:',1)[1].strip());color=THEME['warning'];self.state_label.configure(fg=color);self.state_dot.configure(fg=color);title='Game priority'
-  if title in ('Ready','Model running','Checking model…','No model loaded','Waiting for request','Restore paused'):self.attention_row.pack_forget()
-  else:self.attention_row.pack(fill='x',pady=(6,0),before=self.model_divider)
+  if 'blocked:' in reason and title in ('Ready','Model running','No model loaded','Waiting for request','Unloaded'):
+   title='Game priority';note=reason.split('blocked:',1)[1].strip()
+   self.hero_state.set(title);self.hero_note.set(note)
+  if self.active:state='loading'
+  elif status.startswith('Action failed:'):state='error'
+  elif title in ('Game priority','Gaming priority','Game status unavailable'):state='blocked'
+  elif title in ('Status unavailable','Strata needs attention'):state='unavailable'
+  elif activity and title==activity.get('title'):state=activity.get('state','unknown')
+  elif title in ('Ready','Model running'):state='ready'
+  else:state='unknown'
+  status_note=note if state not in ('ready','reading','generating') else ''
+  for blocker in (activity.get('blockers') or []) if fresh else []:
+   if blocker and blocker not in status_note:status_note+=('\n' if status_note else '')+blocker
+  for panel in (self.performance,self.popup_performance):
+   if panel:panel.set_activity_status(title,status_note,state)
   if self.popup:
    helpful=note if title not in ('Ready','Model running','Checking model…','Reading prompt','Generating','Working','Loaded','Restore paused','No model loaded','Loading model','Loading model…') else ''
    if title in ('Unloaded','Waiting for request'):helpful='Loads on next request.'

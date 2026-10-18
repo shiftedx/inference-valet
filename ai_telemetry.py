@@ -571,6 +571,13 @@ class PerformancePanel:
   self.activity_marks.grid(row=1 if stacked else 0,column=1 if stacked else 2,columnspan=2 if stacked else 1,sticky='w' if stacked else 'e',padx=0 if stacked else (gap,0),pady=(round(4*self.scale),0) if stacked else 0)
   self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
 
+ def set_activity_status(self,title,detail,state):
+  self.activity_title.set('Strata · '+title);self.activity_note.set(detail)
+  self.status_dot.configure(fg=THEME['success'] if state in ('ready','reading','generating') else THEME['warning'] if state in ('blocked','stale','error') else THEME['muted'])
+  self.activity_title_label.configure(fg=THEME['error'] if state=='error' else THEME['warning'] if state in ('unavailable','stale','blocked') else THEME['text'])
+  if self.status_external:self.activity_header.pack(fill='x',expand=True)
+  self._fit_activity_header()
+
  def update_activity(self,activity):
   if not activity:
    self.activity_header.pack_forget()
@@ -585,12 +592,11 @@ class PerformancePanel:
   gpu=str(activity.get('gpu_note') or '')
   blockers=[str(item) for item in activity.get('blockers') or []]
   comfy=activity.get('comfy') or {}
-  self.activity_title.set('Strata · '+title)
   # Each tooltip explains its own indicator; avoid repeating neighboring badges.
   notes=[detail] if detail and activity.get('state') not in ('ready','reading','generating') and detail.casefold()!=title.casefold() else []
   for blocker in blockers:
    if blocker and not any(blocker.casefold() in part.casefold() for part in notes):notes.append(blocker)
-  self.activity_note.set('\n'.join(notes))
+  self.set_activity_status(title,'\n'.join(notes),activity.get('state'))
   count=number(activity.get('gpu_process_count'))
   self.gpu_observation.set(f'{int(count)} other GPU process'+('es' if count!=1 else '') if count is not None else 'GPU process count unavailable')
   self.gpu_mark.configure(text='▣ '+(str(int(count)) if count is not None else '—'))
@@ -598,8 +604,6 @@ class PerformancePanel:
   self.comfy_mark.configure(text='Comfy '+{'busy':'▶','idle':'✓','ready':'✓'}.get(comfy.get('state'),'—'),fg=THEME['success'] if comfy.get('state')=='busy' else THEME['muted'])
   if comfy.get('state') in ('busy','idle','ready'):self.comfy_mark.pack(side='left',padx=(round(12*self.scale),0))
   else:self.comfy_mark.pack_forget()
-  self.status_dot.configure(fg=THEME['success'] if activity.get('state') in ('ready','reading','generating') else THEME['warning'] if activity.get('state') in ('blocked','stale','error') else THEME['muted'])
-  self.activity_title_label.configure(fg=THEME['error'] if activity.get('state')=='error' else THEME['warning'] if activity.get('state') in ('unavailable','stale','blocked') else THEME['text'])
   children=[child for child in self.frame.pack_slaves() if child!=self.activity_header]
   if self.status_external:self.activity_header.pack(fill='x',expand=True)
   elif children:self.activity_header.pack(fill='x',pady=(0,8),before=children[0])

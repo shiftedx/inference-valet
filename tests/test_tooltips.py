@@ -1,4 +1,5 @@
 import pathlib,sys,tkinter as tk,unittest
+from unittest.mock import patch
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from ai_widgets import Tooltip,Button,THEME
 class TooltipTests(unittest.TestCase):
@@ -49,3 +50,52 @@ class TooltipTests(unittest.TestCase):
     above=user.GetWindow(above,3)
    self.assertTrue(found,'Tooltip must be above its owning topmost window')
    hide()
+
+ def test_owner_move_hide_and_interaction_dismiss_help(self):
+  button=Button(self.root,text='Edit',command=lambda:None);button.pack();self.root.update()
+  tip=Tooltip(button,'Help')
+  for action in (lambda:self.root.geometry('+200+200'),lambda:self.root.event_generate('<FocusOut>'),lambda:self.root.withdraw()):
+   tip.show();self.root.update();self.assertIsNotNone(tip.tip)
+   action();self.root.update();self.assertIsNone(tip.tip);self.assertIsNone(tip.pending)
+  self.root.deiconify();self.root.update();tip.schedule();self.root.withdraw();self.root.update()
+  self.assertIsNone(tip.pending)
+
+ def test_profile_menu_grab_suppresses_delayed_help(self):
+  from ai_widgets import ProfileSelect
+  picker=ProfileSelect(self.root,values=['First','Second'],state='readonly');picker.pack();self.root.update()
+  tip=Tooltip(picker,'Selected profile')
+  self.root.tk.call('ttk::combobox::Post',str(picker));self.root.update()
+  try:
+   tip.show();self.root.update();self.assertIsNone(tip.tip)
+  finally:self.root.tk.call('ttk::combobox::Unpost',str(picker))
+  self.root.update();tip.show();self.assertIsNotNone(tip.tip)
+  picker.destroy();self.root.update();self.assertEqual(tip.owner_bindings,[])
+
+ def test_descendant_and_unchanged_owner_configuration_keep_help_visible(self):
+  button=Button(self.root,text='Edit',command=lambda:None);button.pack();self.root.update()
+  tip=Tooltip(button,'Help');tip.show();self.root.update()
+  self.assertIsNotNone(tip.tip)
+  button.event_generate('<Configure>');self.root.event_generate('<Configure>');self.root.update()
+  self.assertIsNotNone(tip.tip)
+  self.root.geometry('+240+240');self.root.update();self.assertIsNone(tip.tip)
+
+ def test_modal_owner_allows_help_but_blocks_background_help(self):
+  button=Button(self.root,text='Edit',command=lambda:None);button.pack()
+  dialog=tk.Toplevel(self.root);dialog.configure(bg=THEME['bg'])
+  field=Button(dialog,text='Save',command=lambda:None);field.pack();self.root.update()
+  dialog.grab_set();self.root.update()
+  background=Tooltip(button,'Background help');foreground=Tooltip(field,'Dialog help')
+  try:
+   background.show();self.assertIsNone(background.tip)
+   foreground.show();self.assertIsNotNone(foreground.tip)
+  finally:dialog.grab_release();dialog.destroy()
+
+ def test_help_stays_within_owner_monitor_work_area(self):
+  button=Button(self.root,text='Edit',command=lambda:None);button.pack();self.root.update()
+  tip=Tooltip(button,'Help on this monitor')
+  # Simulate a display to the left of the primary; absolute negative origins
+  # require Tk's +negative geometry form, not its right-edge offset syntax.
+  with patch('ai_widgets.monitor_work_area',return_value=(-1200,0,-200,900)):
+   tip.show();self.root.update()
+   self.assertGreaterEqual(tip.tip.winfo_rootx(),-1200)
+   self.assertLessEqual(tip.tip.winfo_rootx()+tip.tip.winfo_width(),-200)

@@ -18,6 +18,26 @@ def scale(widget):
     return float(widget.tk.call('tk','scaling'))/(96/72)
 
 
+def monitor_work_area(widget):
+    """Return the work area of the control's display, including negative origins."""
+    import os
+    if os.name=='nt':
+        import ctypes
+        from ctypes import wintypes
+        class MonitorInfo(ctypes.Structure):
+            _fields_=[('size',wintypes.DWORD),('monitor',wintypes.RECT),('work',wintypes.RECT),('flags',wintypes.DWORD)]
+        user=ctypes.windll.user32
+        user.MonitorFromWindow.argtypes=[wintypes.HWND,wintypes.DWORD]
+        user.MonitorFromWindow.restype=wintypes.HANDLE
+        user.GetMonitorInfoW.argtypes=[wintypes.HANDLE,ctypes.POINTER(MonitorInfo)]
+        info=MonitorInfo();info.size=ctypes.sizeof(info)
+        monitor=user.MonitorFromWindow(widget.winfo_id(),2)
+        if monitor and user.GetMonitorInfoW(monitor,ctypes.byref(info)):
+            return (info.work.left,info.work.top,info.work.right,info.work.bottom)
+    left=widget.winfo_vrootx();top=widget.winfo_vrooty()
+    return left,top,left+widget.winfo_vrootwidth(),top+widget.winfo_vrootheight()
+
+
 def reveal_tooltip(tip,owner):
     """Keep help owned by and above its window without moving keyboard focus."""
     tip.transient(owner.winfo_toplevel())
@@ -46,8 +66,36 @@ class Tooltip:
     def __init__(self,widget,text):
         self.widget=widget;self.text=text;self.pending=None;self.tip=None
         for event in ('<Enter>','<FocusIn>'):widget.bind(event,self.schedule,add='+')
-        for event in ('<Leave>','<FocusOut>','<ButtonPress>','<Escape>','<Destroy>'):widget.bind(event,self.hide,add='+')
+        for event in ('<Leave>','<FocusOut>','<ButtonPress>','<KeyPress>','<Unmap>'):widget.bind(event,self.hide,add='+')
+        self.owner=widget.winfo_toplevel();self.owner_bindings=[]
+        self._owner_geometry=self._geometry()
+        for event in ('<Configure>','<Unmap>','<FocusOut>','<ButtonPress>','<KeyPress>'):
+            binding=self.owner.bind(event,self._owner_changed,add='+')
+            self.owner_bindings.append((event,binding))
+        widget.bind('<Destroy>',self._destroy,add='+')
         widget.tooltip=self
+
+    def _owner_changed(self,event):
+        # Toplevel bindings also see descendant events. Only owner geometry
+        # changes invalidate placement; any interaction dismisses help.
+        if event.type in (tk.EventType.Configure,tk.EventType.Unmap):
+            if event.widget!=self.owner:return
+            if event.type==tk.EventType.Configure:
+                geometry=self._geometry()
+                if geometry==self._owner_geometry:return
+                self._owner_geometry=geometry
+        self.hide()
+
+    def _geometry(self):
+        owner=self.owner
+        return owner.winfo_rootx(),owner.winfo_rooty(),owner.winfo_width(),owner.winfo_height()
+
+    def _destroy(self,event=None):
+        self.hide()
+        for sequence,binding in self.owner_bindings:
+            try:self.owner.unbind(sequence,binding)
+            except tk.TclError:pass
+        self.owner_bindings=[]
 
     def schedule(self,event=None):
         self.hide();self.pending=self.widget.after(450,self.show)
@@ -56,12 +104,16 @@ class Tooltip:
         self.hide()
         text=self.text() if callable(self.text) else self.text.get() if hasattr(self.text,'get') else self.text
         if not text or not self.widget.winfo_ismapped():return
+        # Native dropdowns hold a grab and can deliver FocusIn after a click.
+        # Do not create topmost help over an open selection menu or modal.
+        grab=str(self.widget.tk.call('grab','current',self.widget._w))
+        if grab and grab!=str(self.owner):return
+        self._owner_geometry=self._geometry()
         widget=self.widget;factor=scale(widget)
         self.tip=tk.Toplevel(widget);self.tip.withdraw();self.tip.overrideredirect(True)
         tk.Label(self.tip,text=text,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),justify='left',wraplength=round(340*factor),padx=round(8*factor),pady=round(4*factor)).pack()
         self.tip.update_idletasks()
-        left=widget.winfo_vrootx();top=widget.winfo_vrooty()
-        right=left+widget.winfo_vrootwidth();bottom=top+widget.winfo_vrootheight()
+        left,top,right,bottom=monitor_work_area(widget)
         x=max(left,min(widget.winfo_rootx(),right-self.tip.winfo_reqwidth()))
         y=widget.winfo_rooty()+widget.winfo_height()+round(4*factor)
         if y+self.tip.winfo_reqheight()>bottom:y=max(top,widget.winfo_rooty()-self.tip.winfo_reqheight()-round(4*factor))
@@ -248,6 +300,16 @@ class ProfileSelect(ttk.Combobox):
         self.bind('<Return>',self._open,add='+')
         self.bind('<Enter>',lambda event:self.state(['active']),add='+')
         self.bind('<Leave>',lambda event:self.state(['!active']),add='+')
+        # Tk selects the entry text after choosing a list item. The field is
+        # read-only: its focus outline identifies keyboard focus without leaving
+        # an apparent text selection behind when the menu closes.
+        self._selection_tag=name+'.Selection'
+        tags=self.bindtags();self.bindtags((*tags[:2],self._selection_tag,*tags[2:]))
+        for event in ('<<ComboboxSelected>>','<FocusOut>','<Unmap>'):
+            self.bind_class(self._selection_tag,event,self._clear_selection)
+        self._selection_owner=self.winfo_toplevel()
+        self._selection_binding=self._selection_owner.bind('<ButtonPress>',self._outside_press,add='+')
+        self.bind('<Destroy>',self._release_selection_binding,add='+')
         # Configure the native popdown once; its placement, grab, scrolling and
         # keyboard selection remain managed by Tk across display scales.
         popup=self.tk.call('ttk::combobox::PopdownWindow',self._w)
@@ -264,6 +326,22 @@ class ProfileSelect(ttk.Combobox):
         round_command=self.register(self._round_popup)
         for event in ('<Map>','<Configure>'):
             self.tk.call('bind',popup,event,'+'+round_command)
+        clear_command=self.register(self._clear_selection)
+        self.tk.call('bind',popup,'<Unmap>','+'+clear_command)
+
+    def _clear_selection(self,event=None):
+        if self.instate(['readonly']):self.selection_clear()
+
+    def _outside_press(self,event):
+        if event.widget!=self:self._clear_selection()
+
+    def _release_selection_binding(self,event=None):
+        if self._selection_binding:
+            try:self._selection_owner.unbind('<ButtonPress>',self._selection_binding)
+            except tk.TclError:pass
+            self._selection_binding=None
+        for event in ('<<ComboboxSelected>>','<FocusOut>','<Unmap>'):
+            self.unbind_class(self._selection_tag,event)
 
     def _open(self,event=None):
         if not self.instate(['disabled']):self.tk.call('ttk::combobox::Post',self._w)

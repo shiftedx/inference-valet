@@ -90,6 +90,43 @@ Reuse a known-working upstream configuration for model/runtime paths. Retain pro
 | RAM/commit/VRAM admission failure | Read [Performance](PERFORMANCE.md); preserve peer workloads |
 | Generic shortcut icon | Re-run `scripts/install-shortcuts.ps1` |
 
+## Install / upgrade
+
+Install from a cloned repository or extract the release source ZIP into a permanent folder. Windows Python 3.11+ with Tcl/Tk and an internet connection for Python dependencies are required; the release does not bundle Python, Strata or model files.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+# No Desktop or Start links, suitable for an isolated install:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -NoShortcuts
+```
+
+For an upgrade, exit Valet using **tray → Exit Valet** first. Keep the same installation directory. Back up `config.json` and your configured state directory (default `%LOCALAPPDATA%/AIProfiles`). For a clean Git checkout, pull the intended release/tag without discarding local changes. For a source ZIP, extract into a separate temporary folder and copy the new application files over the existing installation, preserving `config.json`, `.venv` and state. Never copy another host's configuration over yours. Then rerun `setup.ps1`: existing config is kept byte-for-byte, dependencies are refreshed, and shell links are updated only if they belong to this checkout. If dependency installation fails, correct the error and rerun setup; do not delete your config/state.
+
+For a Git release checkout after backing up local changes and exiting Valet:
+
+```powershell
+git fetch --tags origin
+git switch --detach v0.3.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
+```
+
+If you use the sign-in task, rerun `scripts/install-startup.ps1` after upgrading or moving the checkout. Only one checkout can own the legacy sign-in task and named shortcuts. A foreign checkout's integration is preserved unless installation is explicitly given `-ReplaceExisting`; use that switch only for an intentional migration. `setup.ps1` also accepts `-NoDesktop`, `-Python C:\path\python.exe`, and `-ShortcutDirectories` for controlled alternative shortcut destinations.
+
+Ordinary application upgrades do not replace external managed wrappers or calibrated backend profiles. If integration changes are required, stop the managed backend through its normal controls before running `install-strata-integration.py --replace-wrappers`; matching live ownership records or unknown Python/Strata process identity block replacement. Existing wrapper changes are backed up under the external root's `integration-backups/`. Replacing wrappers while the backend is live can invalidate graceful-stop verification.
+
+## Uninstall
+
+1. If desired, unload the model explicitly using its normal controls. **Exit Valet** from the tray menu to stop monitoring. Exiting Valet preserves running backend servers.
+2. Remove this installation's shell integration:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\uninstall.ps1
+```
+
+The command is safe to repeat. It removes only shortcuts and the sign-in task whose executable, launcher arguments and working directory match this checkout. Other checkout targets remain intact; permission/provider failures are reported. Use the same `-ShortcutDirectories` if installed to custom destinations; `-NoStartup` skips task removal when startup was never installed.
+
+Config, state, virtual environment, source, external Strata, models, profiles and backups are preserved. There is deliberately no recursive settings purge. For complete removal, stop any managed backend first: its admission hooks can reference this checkout. After exiting Valet, remove the installation folder using File Explorer. Delete `%LOCALAPPDATA%/AIProfiles` only if no other installation uses it and you want to discard saved preferences/history; with custom `state_dir`, inspect its contents and ownership before removing anything. Never delete the external Strata/model directory as part of removing Valet. Python itself is shared software and is not removed.
+
 ## Test without touching production
 
 Set `AI_PROFILES_CONFIG` to a temporary JSON file with a separate `state_dir` and `on_demand.enabled=true`; omit `enabled_profiles` to exercise all five preset IDs. Point `strata_root` at a compatible Strata checkout for native HTTP tests, or an absent directory for core-only tests. The suite uses a simulated engine, not live model prompts. Install dependencies under the interpreter that runs the suite. Report native skips explicitly.

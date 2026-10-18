@@ -375,20 +375,62 @@ class LayoutTests(unittest.TestCase):
         finally:
             app.quit()
 
-    def test_routine_status_is_hidden_but_game_and_errors_are_visible(self):
-        app = launcher.LauncherUI(enable_tray=False, observe=False)
+    def test_activity_uses_only_restore_row_status_including_games_and_errors(self):
+        import time
+        real_tk=tk.Tk
+        for factor in (1,1.5,2):
+            with self.subTest(scale=factor):
+                def scaled_root():
+                    root=real_tk();root.tk.call('tk','scaling',(96/72)*factor);return root
+                with patch.object(tk,'Tk',side_effect=scaled_root):app=launcher.LauncherUI(enable_tray=False,observe=False)
+                try:
+                    app.current=app.keys[0];app.status.set('Running: model');app.window.update()
+                    restore_y=app.auto_control.winfo_rooty()
+                    for state,title in (('reading','Reading prompt'),('generating','Generating'),('busy','Working'),('unloaded','Unloaded')):
+                        reading={'sampled':time.monotonic(),'activity':{'state':state,'title':title,'detail':'Backend detail'}}
+                        app.latest_performance=reading;app.performance.update(reading);app.update_controls();app.window.update()
+                        self.assertEqual(app.performance.activity_title.get(),'Strata · '+title)
+                        self.assertTrue(app.performance.activity_header.winfo_ismapped())
+                        self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    app.latest_performance={};app.current=None;app.status.set('Waiting for request')
+                    app.auto_status.set('Auto reload blocked: game.exe');app.update_controls();app.window.update()
+                    self.assertIn('Game priority',app.performance.activity_title.get())
+                    self.assertIn('game.exe',app.performance.activity_note.get())
+                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    app.auto_status.set('');app.status.set('Action failed: Not enough GPU memory');app.update_controls();app.window.update()
+                    self.assertIn('Action failed',app.performance.activity_title.get())
+                    self.assertIn('GPU memory',app.performance.activity_note.get())
+                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    app.active.add('start');app.status.set('Preparing profile');app.update_controls();app.window.update()
+                    self.assertIn('Loading model',app.performance.activity_title.get())
+                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    app.active.clear()
+                finally:app.quit()
+
+    def test_controller_attention_wins_over_routine_telemetry_and_stale_blockers_clear(self):
+        import time
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
         try:
-            app.status.set('Waiting for request');app.update_controls();app.window.update()
-            self.assertFalse(app.attention_row.winfo_ismapped())
-            app.auto_status.set('Auto reload blocked: game.exe');app.update_controls();app.window.update()
-            self.assertTrue(app.attention_row.winfo_ismapped())
-            self.assertIn('game.exe', app.hero_note.get())
-            app.auto_status.set('');app.status.set('Action failed: Not enough GPU memory')
-            app.update_controls();app.window.update()
-            self.assertTrue(app.attention_row.winfo_ismapped())
-            self.assertIn('GPU memory', app.hero_note.get())
-        finally:
-            app.quit()
+            app.current=app.keys[0]
+            app.latest_performance={'sampled':time.monotonic(),'activity':{'state':'ready','title':'Ready'}}
+            for status,title in (('VRAM headroom is insufficient','Strata needs attention'),
+                                 ('API unavailable','Strata needs attention'),
+                                 ('Gaming busy: game.exe','Gaming priority'),
+                                 ('Game state unknown: retrying','Game status unavailable'),
+                                 ('Action failed: failed to load','Action failed')):
+                with self.subTest(status=status):
+                    app.status.set(status);app.refresh_display()
+                    self.assertEqual(app.performance.activity_title.get(),'Strata · '+title)
+            app.status.set('Waiting for request');app.current=None
+            app.latest_performance={'sampled':time.monotonic(),'activity':{'state':'unloaded','title':'Unloaded'}}
+            app.auto_status.set('Auto reload blocked: game.exe');app.refresh_display()
+            self.assertEqual(app.performance.activity_title.get(),'Strata · Game priority')
+            app.auto_status.set('')
+            app.latest_performance={'sampled':time.monotonic()-20,'activity':{'state':'blocked','title':'Waiting for resources','blockers':['Old GPU workload']}}
+            app.refresh_display()
+            self.assertEqual(app.performance.activity_title.get(),'Strata · Status unavailable')
+            self.assertNotIn('Old GPU workload',app.performance.activity_note.get())
+        finally:app.quit()
 
     def test_restore_selector_persists_shared_choice(self):
         app = launcher.LauncherUI(enable_tray=False, observe=False)

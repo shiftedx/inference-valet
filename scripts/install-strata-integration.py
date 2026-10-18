@@ -5,6 +5,34 @@ import psutil
 SOURCE=pathlib.Path(__file__).resolve().parents[1]/'backends/strata'
 WRAPPERS=('launch_strata_profile.py','managed_strata_server.py','stop_strata_profile.py')
 
+def require_stopped(root,wrappers):
+    record=root/'profile-logs/active-profile.json'
+    if record.exists():
+        try:
+            state=json.loads(record.read_text(encoding='utf-8-sig'))
+            for key in ('launcher','server'):
+                try:
+                    process=psutil.Process(int(state[key+'_pid']))
+                    if abs(process.create_time()-float(state[key+'_started']))<.01:
+                        raise ValueError('A managed backend is running. Stop it before replacing provenance-checked wrappers.')
+                except psutil.NoSuchProcess:pass
+        except (OSError,KeyError,TypeError,json.JSONDecodeError,psutil.AccessDenied) as exc:
+            raise ValueError('Cannot verify the managed ownership record. Resolve it before replacing wrappers.') from exc
+    for process in psutil.process_iter(['name','exe','cmdline']):
+        try:
+            info=process.info;exe=info.get('exe');args=info.get('cmdline')
+            name=(info.get('name') or pathlib.Path(exe or '').name).lower()
+            relevant=name.startswith(('python','strata'))
+            if relevant and (not exe or not args):
+                raise ValueError('Cannot inspect a Python/Strata process. Stop or inspect it before replacing wrappers.')
+            if exe and pathlib.Path(exe).resolve() in (root/'Strata/engine/strata.exe',root/'Strata/engine/strata-vision.exe'):
+                raise ValueError('A managed backend is running. Stop it before replacing provenance-checked wrappers.')
+            if args and any(pathlib.Path(arg).resolve() in wrappers for arg in args[1:] if arg and not arg.startswith('-')):
+                raise ValueError('A managed backend is running. Stop it before replacing provenance-checked wrappers.')
+        except psutil.NoSuchProcess:continue
+        except psutil.AccessDenied as exc:
+            raise ValueError('Cannot inspect a process candidate. Resolve its identity before replacing wrappers.') from exc
+
 def install(root,examples=False,replace=False):
     root=pathlib.Path(root).resolve()
     if not (root/'Strata/serve/server.py').is_file():
@@ -14,12 +42,7 @@ def install(root,examples=False,replace=False):
     if changed and not replace:
         raise ValueError('Existing wrappers differ. Stop Strata, then pass --replace-wrappers; existing files will be backed up.')
     if changed:
-        for proc in psutil.process_iter(['exe','cmdline']):
-            try:
-                exe=pathlib.Path(proc.info['exe'] or '').resolve();args=proc.info['cmdline'] or []
-                if exe in (root/'Strata/engine/strata.exe',root/'Strata/engine/strata-vision.exe') or (len(args)>1 and pathlib.Path(args[1]).resolve() in wrappers):
-                    raise ValueError('A managed backend is running. Stop it before replacing provenance-checked wrappers.')
-            except (psutil.NoSuchProcess,psutil.AccessDenied):continue
+        require_stopped(root,wrappers)
     originals={path:path.read_bytes() if path.exists() else None for path in wrappers}
     backup=None
     if changed:

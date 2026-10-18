@@ -6,15 +6,15 @@
 Automatic game detection, model loading and idle restore for Strata on Windows.</p>
 
 <p align="center">
-  <img src="docs/assets/version.svg" alt="Version 0.2.0">
+  <img src="docs/assets/version.svg" alt="Version 0.3.0">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-a5c6af" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/Python-3.11%2B-a5c6af" alt="Python 3.11+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a5c6af" alt="MIT license"></a>
 </p>
 
-<p align="center"><a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
+<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.0">Download v0.3.0</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
-<p align="center"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></p>
+<p align="center"><a href="docs/assets/panel.png"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></a></p>
 
 | Automatic game detection | Automatic model loading |
 |---|---|
@@ -27,11 +27,11 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 
 <details>
 <summary>Tray and profile settings</summary>
-<p align="center"><img src="docs/assets/tray.png" width="300" alt="Compact tray with live GPU metrics"></p>
+<p align="center"><a href="docs/assets/tray.png"><img src="docs/assets/tray.png" width="300" alt="Compact tray with live GPU metrics"></a></p>
 <p align="center">
-<img src="docs/assets/profile-editor.png" width="300" alt="Profile settings: context, agents and output budgets">
-<img src="docs/assets/memory-editor.png" width="300" alt="Memory settings: expert cache, VRAM reserve and KV residency">
-<img src="docs/assets/engine-editor.png" width="300" alt="Engine settings: prompt batches, CPU workers and draft tokens">
+<a href="docs/assets/profile-editor.png"><img src="docs/assets/profile-editor.png" width="300" alt="Profile settings: context, agents and output budgets"></a>
+<a href="docs/assets/memory-editor.png"><img src="docs/assets/memory-editor.png" width="300" alt="Memory settings: expert cache, VRAM reserve and KV residency"></a>
+<a href="docs/assets/engine-editor.png"><img src="docs/assets/engine-editor.png" width="300" alt="Engine settings: prompt batches, CPU workers and draft tokens"></a>
 </p>
 </details>
 
@@ -72,6 +72,14 @@ notepad .\config.json
 
 **Keep a page file enabled; keep the hot working set in RAM/VRAM.** Reference setup: **48 GiB RAM + 32 GiB VRAM + 64 GiB page file**. This provides commit capacity for loading; it is not a universal speed preset. Sustained paging requires a smaller working set. See **[page-file sizing, memory budgets and troubleshooting](docs/PERFORMANCE.md)**.
 
+## Upgrade / uninstall
+
+| Action | Command / guide |
+|---|---|
+| Upgrade | Exit Valet; update application files; rerun `scripts/setup.ps1` · [Preserve config and state](docs/SETUP.md#install--upgrade) |
+| Uninstall | Exit Valet; run `scripts/uninstall.ps1` · [Removal and retained data](docs/SETUP.md#uninstall) |
+| Changes | [v0.3.0](CHANGELOG.md) |
+
 ## Startup / checks
 
 ```powershell
@@ -91,4 +99,4 @@ Signed-in, awake Windows session required. Remove startup with `scripts/remove-s
 | Backend API / launcher contract | [Backends](docs/BACKENDS.md) |
 | Configure or contribute with an agent | [AGENTS.md](AGENTS.md) · [Contributing](CONTRIBUTING.md) |
 
-Screenshots: actual app on the reference host; values vary and unavailable metrics display `—`. Engines/models remain external. [MIT](LICENSE); upstream licenses remain separate. [Credits](CREDITS.md).
+Screenshots: real app widgets and live telemetry, captured at ≥2× display resolution. Sample: single-agent HTML accessibility edit with thinking disabled; individual-request rates vary. Unavailable metrics display `—`. Engines/models remain external. [MIT](LICENSE); upstream licenses remain separate. [Credits](CREDITS.md).

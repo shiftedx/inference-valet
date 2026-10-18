@@ -79,6 +79,29 @@ class EditorTests(unittest.TestCase):
                     app.quit()
             a.reload_profiles()
 
+    def test_constrained_editor_keeps_actions_visible_and_reveals_keyboard_focus(self):
+        real_tk=tk.Tk
+        with tempfile.TemporaryDirectory() as directory:
+            store=self.make_store(pathlib.Path(directory))
+            def root():
+                window=real_tk();window.tk.call('tk','scaling',(96/72)*2);return window
+            with patch.object(tk,'Tk',side_effect=root),patch.object(a,'PROFILE_STORE',store), \
+                 patch('ai_profile_editor.monitor_work_area',return_value=(0,0,1600,1000)):
+                app=a.LauncherUI(enable_tray=False,observe=False)
+                try:
+                    app.edit_profile();editor=app.profile_editor;app.window.update()
+                    self.assertTrue(editor.scrollbar.winfo_ismapped())
+                    self.assertLess(editor.window.winfo_rooty()+editor.window.winfo_height(),1000)
+                    self.assertLess(editor.save_button.winfo_rooty()+editor.save_button.winfo_height(),1000)
+                    for key in ('kv','name'):
+                        field=editor.fields[key];field.focus_force();app.window.update()
+                        self.assertGreaterEqual(field.winfo_rooty(),editor.canvas.winfo_rooty())
+                        self.assertLessEqual(field.winfo_rooty()+field.winfo_height(),
+                                             editor.canvas.winfo_rooty()+editor.canvas.winfo_height())
+                    editor.select_page('Engine');app.window.update()
+                    self.assertEqual(editor.canvas.yview()[0],0)
+                finally:app.quit()
+
     def test_invalid_save_keeps_editor_and_files_untouched(self):
         with tempfile.TemporaryDirectory() as directory:
             store=self.make_store(pathlib.Path(directory));path=store.paths('strata-128k')[0];before=path.read_bytes()
