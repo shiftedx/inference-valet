@@ -15,7 +15,7 @@ class ProfileTests(unittest.TestCase):
         root=pathlib.Path(self.directory.name)
         self.store=ProfileStore(root/'backend',root/'state');self.key='strata-128k'
         self.path,self.shared,_=self.store.paths(self.key);self.path.parent.mkdir(parents=True)
-        self.data=dict(model_name='test-model',parallel=1,args=['--max-context','163840','--kv','int8',
+        self.data=dict(exe='engine.exe',model_name='test-model',parallel=1,args=['--max-context','163840','--kv','int8',
             '--kv-resident','32768','--native','keep-model.gguf','--expert-cache','auto',
             '--prefill','8192','--spec','4'],vision={'gpu':True,'max_tokens':1024},
             env={'UNCHANGED':'yes'},launcher_min_available_ram_gib=26,fit_max_tokens=True)
@@ -43,7 +43,7 @@ class ProfileTests(unittest.TestCase):
 
     def test_validation_rejects_bad_values_without_writing(self):
         values,snapshot=self.store.load(self.key);before=[p.read_bytes() for p in (self.path,self.shared)]
-        for field,value in [('name',''),('context','nan'),('slots','5'),('context','1024'),
+        for field,value in [('name',''),('context','nan'),('slots','0'),('context','1024'),
                             ('max_tokens','200000'),('reasoning','-1'),('workers','-1'),
                             ('resident','NaN'),('pcie','1.1'),('kv','invented'),('effort','xhigh')]:
             with self.subTest(field=field,value=value):

@@ -12,7 +12,7 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a5c6af" alt="MIT license"></a>
 </p>
 
-<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.0">Download v0.3.0</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="docs/PERFORMANCE.md">RAM / page file</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
+<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.0">Download v0.3.0</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
 <p align="center"><a href="docs/assets/panel.png"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></a></p>
 
@@ -49,8 +49,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 notepad .\config.json
 ```
 
-1. Install managed Strata wrappers; configure model paths: **[setup guide](docs/SETUP.md#connect-strata)**.
-2. Set `strata_root`, `enabled_profiles` and optional on-demand mode in `config.json`.
+1. Connect your existing Strata deployment: **[setup guide](docs/SETUP.md#connect-strata)**.
+2. Set `strata_root` in `config.json`; discover existing profiles automatically. Optionally restrict `enabled_profiles` by filename stem.
 3. Validate; open the dashboard:
 
 ```powershell
@@ -67,10 +67,6 @@ notepad .\config.json
 | Restore when idle → off | Persistently pause idle GPU reload |
 | Tray left-click / right-click | Quick controls / actions and Exit Valet |
 
-
-## Limited RAM / maximum performance
-
-**Keep a page file enabled; keep the hot working set in RAM/VRAM.** Reference setup: **48 GiB RAM + 32 GiB VRAM + 64 GiB page file**. This provides commit capacity for loading; it is not a universal speed preset. Sustained paging requires a smaller working set. See **[page-file sizing, memory budgets and troubleshooting](docs/PERFORMANCE.md)**.
 
 ## Upgrade / uninstall
 
@@ -94,9 +90,8 @@ Signed-in, awake Windows session required. Remove startup with `scripts/remove-s
 | Need | Open |
 |---|---|
 | Paths, profiles, extra games, LAN, first-run setup | [Setup](docs/SETUP.md) |
-| Commit headroom, page-file sizing, constrained hosts | [Performance](docs/PERFORMANCE.md) |
 | Missing-listener recovery, safe unloading, issue history | [Recovery](docs/RECOVERY.md) |
 | Backend API / launcher contract | [Backends](docs/BACKENDS.md) |
 | Configure or contribute with an agent | [AGENTS.md](AGENTS.md) · [Contributing](CONTRIBUTING.md) |
 
-Screenshots: real app widgets and live telemetry, captured at ≥2× display resolution. Sample: single-agent HTML accessibility edit with thinking disabled; individual-request rates vary. Unavailable metrics display `—`. Engines/models remain external. [MIT](LICENSE); upstream licenses remain separate. [Credits](CREDITS.md).
+Screenshots: real app widgets and live telemetry, captured at ≥2× display resolution. Readings vary with your deployment and workload. Unavailable metrics display `—`. Engines/models remain external. [MIT](LICENSE); upstream licenses remain separate. [Credits](CREDITS.md).

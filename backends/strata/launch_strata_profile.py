@@ -12,10 +12,38 @@ ROOT=pathlib.Path(__file__).resolve().parent
 INSTALL=ROOT/'Strata'
 PY=INSTALL/'.venv/Scripts/python.exe'
 def fetch(path,base):return json.load(urllib.request.urlopen(base+path,timeout=10))
+def profile_path(name):
+    # Keep the standalone wrapper's filename contract aligned with Valet discovery.
+    if (not isinstance(name,str) or not name or name.startswith('-') or name in ('.','..')
+            or name!=name.rstrip(' .') or len(name)>180
+            or any(ord(c)<32 or c in '<>:"/\\|?*' for c in name)
+            or name.split('.')[0].upper() in {'CON','PRN','AUX','NUL',*(f'COM{i}' for i in range(1,10)),*(f'LPT{i}' for i in range(1,10))}
+            or name.casefold().endswith('.shared-settings')):
+        raise ValueError('Choose an existing profile filename stem.')
+    directory=ROOT/'profiles'
+    if directory.is_symlink() or directory.resolve().parent!=ROOT.resolve():raise ValueError('Profiles directory must stay inside the backend root.')
+    path=directory/(name+'.json');shared=path.with_suffix('.shared-settings.json')
+    for candidate in (path,shared):
+        if candidate.is_symlink() or candidate.resolve().parent!=directory.resolve():raise ValueError('Profile and settings files must stay inside the profiles directory.')
+    if not path.is_file():raise ValueError('Profile must be an existing JSON file inside the profiles directory.')
+    return path
+
+def profile_config(name):
+    template=profile_path(name)
+    cfg=json.loads(template.read_text(encoding='utf-8-sig'))
+    if not isinstance(cfg,dict):raise ValueError('Profile must be a JSON object.')
+    cfg.setdefault('parallel',1)
+    model=cfg.get('model_name') or cfg.get('model')
+    if not isinstance(model,str) or not model.strip():raise ValueError('Profile requires a model_name or model identifier.')
+    cfg['model_name']=model
+    return template,cfg
+
 def main():
-    ap=argparse.ArgumentParser();ap.add_argument('profile',choices=['quality-iq3-xxs','quality-iq3-xxs-agents','quality-iq3-xxs-agents-3','quality-iq3-xxs-agents-4','quality-iq3-xxs-max-context']);ap.add_argument('--verify',action='store_true');ap.add_argument('--on-demand',action='store_true');a=ap.parse_args()
+    ap=argparse.ArgumentParser();ap.add_argument('profile',help='Existing profile JSON filename stem');ap.add_argument('--verify',action='store_true');ap.add_argument('--on-demand',action='store_true');a=ap.parse_args()
     a.verify=a.verify or os.environ.get('STRATA_LAUNCH_VERIFY')=='1'
-    template=ROOT/'profiles'/(a.profile+'.json');cfg=json.loads(template.read_text(encoding='utf-8-sig'))
+    try:template,cfg=profile_config(a.profile)
+    except ValueError as exc:ap.error(str(exc))
+    maximum=cfg.pop('launcher_max_vram_used_mib',None)
     bind=os.environ.get('STRATA_VALET_BIND',cfg.get('host','127.0.0.1'));port=int(cfg.get('port',8080));base=f'http://127.0.0.1:{port}'
     conflicts=[]
     for p in psutil.process_iter(['name']):
@@ -24,14 +52,14 @@ def main():
         if s.connect_ex(('127.0.0.1',port))==0:conflicts.append(f'port {port} is already occupied')
     try:
         used=float(subprocess.check_output(['nvidia-smi','--query-gpu=memory.used','--format=csv,noheader,nounits'],text=True,timeout=10).strip().splitlines()[0])
-        if used>4096:conflicts.append(f'GPU already uses {used/1024:.1f} GiB; stop the GPU workload first')
+        if maximum is not None and used>maximum:conflicts.append(f'GPU already uses {used/1024:.1f} GiB; stop the GPU workload first')
     except Exception as exc:print('Cannot verify GPU availability:',exc);return 1
     if a.on_demand:conflicts=[c for c in conflicts if 'port ' in c or 'strata' in c.lower()]
     if conflicts:
         print('Strata was not started. Resource conflict: '+ '; '.join(conflicts))
         print('Stop the active workload, then try again. This launcher never kills unrelated services.')
         return 2
-    minimum=cfg.pop('launcher_min_available_ram_gib',12)
+    minimum=cfg.pop('launcher_min_available_ram_gib',0)
     estimated=cfg.pop('launcher_estimated_commit_gib',0)
     available=psutil.virtual_memory().available/2**30
     if not a.on_demand and available<minimum:print(f'Strata was not started: {available:.1f} GiB RAM available; this profile requires at least {minimum} GiB before loading.');return 2

@@ -7,13 +7,25 @@ import pathlib
 import time
 import uuid
 
-PRESETS = {
-    'strata-128k': ('quality-iq3-xxs', 163840, 1),
-    'strata-256k': ('quality-iq3-xxs-max-context', 262144, 1),
-    'strata-2': ('quality-iq3-xxs-agents', 65536, 2),
-    'strata-3': ('quality-iq3-xxs-agents-3', 163840, 3),
-    'strata-4': ('quality-iq3-xxs-agents-4', 65536, 4),
+# Persisted IDs from earlier Valet versions remain aliases, never tuning defaults.
+LEGACY_ALIASES = {
+    'strata-128k': 'quality-iq3-xxs',
+    'strata-256k': 'quality-iq3-xxs-max-context',
+    'strata-2': 'quality-iq3-xxs-agents',
+    'strata-3': 'quality-iq3-xxs-agents-3',
+    'strata-4': 'quality-iq3-xxs-agents-4',
 }
+
+def safe_stem(value):
+    if (not isinstance(value,str) or not value or value.startswith('-') or value in ('.','..')
+            or value!=value.rstrip(' .') or len(value)>180
+            or any(ord(c)<32 or c in '<>:"/\\|?*' for c in value)):
+        raise ValueError('Profile ID must be a filename stem inside the profiles directory.')
+    if value.split('.')[0].upper() in {'CON','PRN','AUX','NUL',*(f'COM{i}' for i in range(1,10)),*(f'LPT{i}' for i in range(1,10))}:
+        raise ValueError('Reserved Windows device names cannot identify a profile.')
+    if value.casefold().endswith('.shared-settings'):
+        raise ValueError('Shared settings are not executable profiles.')
+    return value
 
 def argument(args, flag, default=''):
     return args[args.index(flag)+1] if flag in args else default
@@ -75,31 +87,62 @@ class ProfileStore:
         self.names_path = self.state/'profile-names.json'
 
     def paths(self, key):
-        name = PRESETS[key][0]
-        path = self.root/'profiles'/f'{name}.json'
-        return path, path.with_suffix('.shared-settings.json'), self.names_path
+        key=safe_stem(key)
+        directory=self.root/'profiles'
+        if directory.is_symlink() or directory.resolve().parent!=self.root.resolve():
+            raise ValueError('Profiles directory must stay inside the configured backend root.')
+        # A real filename takes priority; aliases only resolve old saved IDs.
+        name=key if (directory/(key+'.json')).exists() else LEGACY_ALIASES.get(key,key)
+        path=directory/(name+'.json');shared=path.with_suffix('.shared-settings.json')
+        for candidate,parent in ((path,directory),(shared,directory),(self.names_path,self.state)):
+            if candidate.is_symlink() or candidate.resolve().parent!=parent.resolve():
+                raise ValueError('Profile and settings files must stay inside their configured directories.')
+        return path,shared,self.names_path
 
     def descriptors(self, python, config):
-        names = read_object(self.names_path, {})
-        enabled = config.get('enabled_profiles', list(PRESETS))
-        if not isinstance(enabled, list) or not enabled or any(key not in PRESETS for key in enabled):
-            raise ValueError('enabled_profiles must be a nonempty list of Strata profile IDs')
-        result = {}
-        for key in enabled:
-            preset, context, slots = PRESETS[key]
-            path = self.paths(key)[0]
-            data = read_object(path) if path.exists() else {}
-            context = int(argument(data.get('args', []), '--max-context', context))
-            slots = int(data.get('parallel', slots))
-            name = profile_name(names.get(key, 'Strata'), context, slots)
-            result[key] = dict(label=name, name=name, engine='strata', profile=preset,
-                               context=context, slots=slots, model=data.get('model_name', 'qwen3.8-flash-next-iq3_xxs'),
-                               command=[str(python), str(self.root/'launch_strata_profile.py'), preset,
-                                        *(['--on-demand'] if config.get('on_demand', {}).get('enabled') else [])],
-                               cwd=str(self.root))
-        for key, profile in result.items():
+        names=read_object(self.names_path,{})
+        enabled=config.get('enabled_profiles')
+        if enabled is not None and (not isinstance(enabled,list) or any(not isinstance(k,str) for k in enabled)):
+            raise ValueError('enabled_profiles must be a list of profile filename stems or legacy IDs.')
+        directory=self.root/'profiles';self.discovery_errors=[]
+        if not directory.exists():return {}
+        if directory.is_symlink() or directory.resolve().parent!=self.root.resolve():
+            self.discovery_errors.append('Profiles directory is outside the backend root.');return {}
+        stems=sorted((p.stem for p in directory.glob('*.json') if not p.name.casefold().endswith('.shared-settings.json')),key=str.casefold)
+        aliases={stem:key for key,stem in LEGACY_ALIASES.items()}
+        keys=enabled if enabled is not None else [aliases.get(stem,stem) if aliases.get(stem,stem) not in stems or aliases.get(stem,stem)==stem else stem for stem in stems]
+        result={};seen=set()
+        for key in keys:
+            try:
+                path=self.paths(key)[0]
+                if path in seen or not path.is_file():continue
+                safe_stem(path.stem);data=read_object(path)
+                # Ignore unrelated JSON support files rather than inventing profiles.
+                if 'args' not in data:continue
+                if not isinstance(data.get('exe'),str) or not data['exe'].strip():
+                    raise ValueError('An executable profile needs an explicit exe path.')
+                validate_arguments(data['args'])
+                model=data.get('model_name') or data.get('model')
+                if not isinstance(model,str) or not model.strip():
+                    raise ValueError('A profile needs an explicit model_name or model.')
+                try:context=int(argument(data['args'],'--max-context'))
+                except (ValueError,TypeError):raise ValueError('A profile needs an explicit positive --max-context value.') from None
+                slots=data.get('parallel',1)
+                if isinstance(slots,bool) or not isinstance(slots,int) or slots<1 or context<1:
+                    raise ValueError('Context and parallel must be positive integers.')
+                base=names.get(key,names.get(path.stem,data.get('label') or data.get('name') or model))
+                if not isinstance(base,str) or not base.strip():base=model
+                name=profile_name(base,context,slots)
+                result[key]=dict(label=name,name=name,engine='strata',profile=path.stem,
+                    context=context,slots=slots,model=model,profile_hash=fingerprint(path),
+                    command=[str(python),str(self.root/'launch_strata_profile.py'),path.stem,
+                             *(['--on-demand'] if config.get('on_demand',{}).get('enabled') else [])],cwd=str(self.root))
+                seen.add(path)
+            except (OSError,ValueError,TypeError,KeyError) as exc:
+                self.discovery_errors.append(f'{key}: {exc}')
+        for key,profile in result.items():
             if sum(row['label']==profile['label'] for row in result.values())>1:
-                profile['name'] = profile['label']+f' · {key}'
+                profile['name']=profile['label']+f' · {key}'
         return result
 
     def load(self, key):
@@ -107,14 +150,14 @@ class ProfileStore:
         data = read_object(paths[0]);shared = read_object(paths[1], {});names = read_object(paths[2], {})
         args = data['args']
         validate_arguments(args)
-        values = dict(name=names.get(key, 'Strata'), context=argument(args, '--max-context'),
+        values = dict(name=names.get(key, names.get(paths[0].stem, data.get('label') or data.get('name') or data.get('model_name') or data.get('model') or paths[0].stem)), context=argument(args, '--max-context'),
                       slots=str(data.get('parallel', 1)), kv=argument(args, '--kv'),
                       max_tokens=str(shared.get('max_tokens', data.get('max_tokens', ''))),
-                      reasoning=str(shared.get('reasoning_budget_tokens', data.get('reasoning_budget_tokens', 0))),
-                      effort=shared.get('reasoning_effort', data.get('reasoning_effort', 'high')))
+                      reasoning=str(shared.get('reasoning_budget_tokens', data.get('reasoning_budget_tokens', ''))),
+                      effort=shared.get('reasoning_effort', data.get('reasoning_effort', '')))
         values.update({key:argument(args, spec[0]) for key, spec in TUNING.items()})
         values['ple_io'] = argument(args, '--ple-io')
-        snapshot = dict(data=data, shared=shared, names=names, hashes=[fingerprint(path) for path in paths])
+        snapshot = dict(data=data, shared=shared, names=names, display_name=values['name'], hashes=[fingerprint(path) for path in paths])
         return values, snapshot
 
     @staticmethod
@@ -122,7 +165,8 @@ class ProfileStore:
         data = copy.deepcopy(snapshot['data']);shared = copy.deepcopy(snapshot['shared'])
         validate_arguments(data['args'])
         name = values['name'].strip()
-        if not name or len(name)>64 or any(ord(char)<32 for char in name):
+        imported_name=str(snapshot.get('display_name','')).strip()
+        if not name or (len(name)>64 and name!=imported_name) or any(ord(char)<32 for char in name):
             raise ValueError('Profile name must contain 1–64 printable characters.')
         def integer(key, low, high, label):
             try:
@@ -130,19 +174,24 @@ class ProfileStore:
                 if not raw.isdecimal():raise ValueError()
                 value = int(raw)
             except (ValueError, TypeError):raise ValueError(f'{label} must be a whole number.')
-            if not low<=value<=high:raise ValueError(f'{label} must be between {low:,} and {high:,}.')
+            if value<low or high is not None and value>high:
+                raise ValueError(f'{label} must be at least {low:,}.' if high is None else f'{label} must be between {low:,} and {high:,}.')
             return value
-        context = integer('context', 1024, 1048576, 'Context per agent')
-        slots = integer('slots', 1, 4, 'Agents')
-        budget = integer('reasoning', 0, context, 'Reasoning budget')
-        if values['effort'] not in ('none', 'low', 'medium', 'high'):
+        context = integer('context', 1, None, 'Context per agent')
+        slots = integer('slots', 1, None, 'Agents')
+        budget = integer('reasoning', 0, context, 'Reasoning budget') if str(values['reasoning']).strip() else None
+        effort=values['effort']
+        imported_effort=snapshot['shared'].get('reasoning_effort',snapshot['data'].get('reasoning_effort',''))
+        if effort not in ('', 'none', 'low', 'medium', 'high', imported_effort):
             raise ValueError('Choose a supported reasoning effort.')
         # Keep an existing backend KV format if it is not one of the common presets.
         if values['kv'] not in ('int8', 'q4_0', 'fp16', 'k8v4', argument(data['args'], '--kv')):
             raise ValueError('Choose a supported KV format.')
         data['parallel'] = slots
-        data['reasoning_budget_tokens'] = shared['reasoning_budget_tokens'] = budget
-        data['reasoning_effort'] = shared['reasoning_effort'] = values['effort']
+        for field,value in (('reasoning_budget_tokens',budget),('reasoning_effort',effort or None)):
+            if value is None:
+                data.pop(field,None);shared.pop(field,None)
+            else:data[field]=shared[field]=value
         if str(values['max_tokens']).strip():
             shared['max_tokens'] = integer('max_tokens', 1, context, 'Maximum output')
             if 'max_tokens' in data:data['max_tokens'] = shared['max_tokens']

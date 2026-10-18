@@ -9,6 +9,8 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 spec=importlib.util.spec_from_file_location('efficient_launcher',ROOT/'ai-launcher.py')
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+from profile_fixtures import configure_launcher
+configure_launcher(a)
 
 class EfficiencyTests(unittest.TestCase):
     def test_process_name_shortlist_still_requires_verified_executable(self):

@@ -51,18 +51,8 @@ if valet:
 - Hidden idle UI mailbox: poll every 250 ms; visible UI/actions: every 100 ms.
 - Keep game admission/cancellation checks at 1 second; publish status changes immediately, unchanged heartbeat every 2 seconds.
 
-## Worker reuse and profiling
+## Background workers
 
 - Reuse one telemetry worker and one recovery-policy worker; retain independent lanes and single-flight polling.
 - Keep lifecycle actions separate from polling so model loading cannot exhaust the polling workers.
 - Exit: cancel queued polling, stop submitting new work, let bounded in-flight reads finish without blocking the Tk UI.
-- Profile only verified tray/server identities; retain separate measurements across PID changes; exclude prompts, credentials and model contents.
-- Sample CPU, RSS, threads, handles, I/O counters and request/game activity; use idle CPU separately from overall CPU.
-- CPU units: percent of one logical CPU core; exclude other processes and profiler overhead.
-
-```powershell
-.\.venv\Scripts\python.exe scripts/profile-performance.py --minutes 60 --interval 10 --output C:/path/to/profile-output
-```
-
-- Results: samples.jsonl and summary.json. Keep profile output outside the Git checkout.
-- Finite run; maximum 24 hours; minimum 1-second sampling; no startup registration or model lifecycle changes.

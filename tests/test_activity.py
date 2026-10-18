@@ -58,9 +58,18 @@ class SnapshotTests(unittest.TestCase):
         result = self.snapshot(hardware=hardware)
         self.assertEqual(result['state'], 'ready')
         self.assertEqual(result['blockers'], [])
-        result = self.snapshot(status={'loaded': False}, hardware=hardware)
+        result = self.snapshot(status={'loaded': False}, hardware=hardware,options={'max_vram_used_mib':4096})
         self.assertEqual(result['state'], 'blocked')
         self.assertEqual(len(result['blockers']), 2)
+
+    def test_optional_headroom_limits_do_not_invent_reference_requirements(self):
+        hardware=dict(gpu_util=0,gpu_mem_used=6000*2**20,gpu_mem_total=8000*2**20,ram_free_gib=8,commit_free_gib=10)
+        for options in ({},{'max_vram_used_mib':None,'min_free_vram_mib':None,'min_ram_gib':None,'min_commit_gib':None}):
+            result=self.snapshot(status={'loaded':False},hardware=hardware,options=options)
+            self.assertEqual(result['blockers'],[])
+        result=self.snapshot(status={'loaded':False},hardware=hardware,options={'min_free_vram_mib':3000})
+        self.assertEqual(len(result['blockers']),1)
+        self.assertIn('GiB free',result['gpu_note'])
 
     def test_blockers_respect_configured_limits(self):
         result = self.snapshot(status={'loaded': False}, hardware=dict(gpu_util=10, gpu_mem_used=2000*2**20, gpu_mem_total=16000*2**20),
@@ -116,7 +125,7 @@ class SnapshotTests(unittest.TestCase):
     def test_ram_commit_block_only_before_load(self):
         hardware = dict(ram_free_gib=20, commit_free_gib=30)
         self.assertEqual(self.snapshot(hardware=hardware)['blockers'], [])
-        result = self.snapshot(status={'loaded': False}, hardware=hardware)
+        result = self.snapshot(status={'loaded': False}, hardware=hardware,options={'min_ram_gib':26,'min_commit_gib':35})
         self.assertEqual(result['state'], 'blocked')
         self.assertIn('System memory', result['blockers'][0])
 
@@ -138,7 +147,7 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(result['title'], 'Preparing request')
         self.assertEqual(result['blockers'], [])
         result = self.snapshot(status={'loaded': False, 'activity': {'in_flight': 0}},
-                               demand={'active_requests': 0}, hardware=hardware)
+                               demand={'active_requests': 0}, hardware=hardware,options={'max_vram_used_mib':4096,'min_ram_gib':26})
         self.assertEqual(result['state'], 'blocked')
         self.assertEqual(len(result['blockers']), 3)
 

@@ -11,11 +11,13 @@ class InstallTests(unittest.TestCase):
         self.root=pathlib.Path(self.directory.name);server=self.root/'Strata/serve/server.py'
         server.parent.mkdir(parents=True);server.write_text('# simulated backend')
 
-    def test_examples_and_wrappers_are_idempotent_and_preserve_existing_profiles(self):
-        result=m.install(self.root,True);self.assertEqual(result['created_profiles'],4)
+    def test_wrappers_are_idempotent_and_preserve_existing_profiles(self):
+        result=m.install(self.root)
+        self.assertFalse((self.root/'profiles').exists())
+        (self.root/'profiles').mkdir()
         profile=self.root/'profiles/quality-iq3-xxs.json';profile.write_text('{"calibrated":true}')
-        result=m.install(self.root,True)
-        self.assertEqual(result['created_profiles'],0);self.assertEqual(profile.read_text(),'{"calibrated":true}')
+        result=m.install(self.root)
+        self.assertEqual(profile.read_text(),'{"calibrated":true}')
         self.assertEqual((self.root/m.WRAPPERS[0]).read_bytes(),(m.SOURCE/m.WRAPPERS[0]).read_bytes())
 
     def test_conflicting_wrapper_requires_explicit_replace_and_stopped_backend(self):

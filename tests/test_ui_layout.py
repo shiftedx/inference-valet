@@ -10,9 +10,32 @@ sys.path.insert(0, str(ROOT))
 spec = importlib.util.spec_from_file_location('launcher_ui_layout', ROOT / 'ai-launcher.py')
 launcher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(launcher)
+from profile_fixtures import configure_launcher
+configure_launcher(launcher)
 
 
 class LayoutTests(unittest.TestCase):
+    def test_empty_profile_catalog_disables_load_edit_and_keeps_dashboard_and_tray_usable(self):
+        with patch.object(launcher,'PROFILES',{}),patch.object(launcher,'PROFILE_NAMES',{}):
+            app=launcher.LauncherUI(enable_tray=False,observe=False)
+            try:
+                self.assertEqual(app.keys,[])
+                self.assertEqual(app.selected.get(),'No profiles found')
+                for widget in (app.picker,app.start_button,app.edit_button):
+                    self.assertEqual(str(widget.cget('state')),'disabled')
+                self.assertIn('profiles',app.auto_explanation.get())
+                with patch.object(launcher,'start_profile') as start:
+                    app.begin('start');app.edit_profile();start.assert_not_called()
+                    self.assertFalse(app.active);self.assertIsNone(app.profile_editor)
+                app.show_popup(anchor=(100,100));app.window.update()
+                self.assertEqual(str(app.popup_picker.cget('state')),'disabled')
+                self.assertEqual(str(app.popup_start.cget('state')),'disabled')
+                self.assertEqual(app.selected_profile(),None)
+                menu=launcher.tray_menu(lambda *args:None,lambda:False,lambda:None)
+                load=next(item for item in menu.items if item.text=='Load model')
+                self.assertFalse(load.enabled)
+            finally:app.quit()
+
     def test_right_click_keeps_native_tray_menu_and_left_click_opens_flyout(self):
         import pystray
         with patch.object(pystray.Icon, 'run'), patch.object(pystray.Icon, 'stop'), \
@@ -385,25 +408,26 @@ class LayoutTests(unittest.TestCase):
                 with patch.object(tk,'Tk',side_effect=scaled_root):app=launcher.LauncherUI(enable_tray=False,observe=False)
                 try:
                     app.current=app.keys[0];app.status.set('Running: model');app.window.update()
-                    restore_y=app.auto_control.winfo_rooty()
+                    # OS work-area fitting may move the whole window; only layout offsets matter.
+                    restore_y=app.auto_control.winfo_rooty()-app.window.winfo_rooty()
                     for state,title in (('reading','Reading prompt'),('generating','Generating'),('busy','Working'),('unloaded','Unloaded')):
                         reading={'sampled':time.monotonic(),'activity':{'state':state,'title':title,'detail':'Backend detail'}}
                         app.latest_performance=reading;app.performance.update(reading);app.update_controls();app.window.update()
                         self.assertEqual(app.performance.activity_title.get(),'Strata · '+title)
                         self.assertTrue(app.performance.activity_header.winfo_ismapped())
-                        self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                        self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
                     app.latest_performance={};app.current=None;app.status.set('Waiting for request')
                     app.auto_status.set('Auto reload blocked: game.exe');app.update_controls();app.window.update()
                     self.assertIn('Game priority',app.performance.activity_title.get())
                     self.assertIn('game.exe',app.performance.activity_note.get())
-                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
                     app.auto_status.set('');app.status.set('Action failed: Not enough GPU memory');app.update_controls();app.window.update()
                     self.assertIn('Action failed',app.performance.activity_title.get())
                     self.assertIn('GPU memory',app.performance.activity_note.get())
-                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
                     app.active.add('start');app.status.set('Preparing profile');app.update_controls();app.window.update()
                     self.assertIn('Loading model',app.performance.activity_title.get())
-                    self.assertEqual(app.auto_control.winfo_rooty(),restore_y)
+                    self.assertEqual(app.auto_control.winfo_rooty()-app.window.winfo_rooty(),restore_y)
                     app.active.clear()
                 finally:app.quit()
 
@@ -496,8 +520,11 @@ class LayoutTests(unittest.TestCase):
             # Fit the widest individual control, but not two controls side by side.
             # Use physical widget measurements so this also covers high desktop DPI.
             available = max(w.winfo_reqwidth() for w in (app.popup_start,app.popup_stop,app.popup_restore_switch,app.popup_delay_picker))+2*int(app.popup_content.cget('padx'))+2
+            # A short desktop may already need vertical scrolling. Reserve its
+            # width before shrinking the outer popup to the controls' minimum.
+            scrollbar_width=app.popup_scroll.winfo_reqwidth() if app.popup_scroll.winfo_ismapped() else 0
             minimum = app.fit_popup_actions(available)
-            app.popup.geometry(f'{available}x{app.popup.winfo_height()}')
+            app.popup.geometry(f'{available+scrollbar_width}x{app.popup.winfo_height()}')
             app.window.update()
             self.assertLessEqual(minimum, available)
             self.assertGreater(app.popup_delay_picker.winfo_y(),app.popup_restore_switch.winfo_y()+app.popup_restore_switch.winfo_height())
@@ -508,6 +535,29 @@ class LayoutTests(unittest.TestCase):
             self.assertGreater(app.popup_stop.winfo_y(), app.popup_start.winfo_y()+app.popup_start.winfo_height())
         finally:
             app.quit()
+
+    def test_short_narrow_work_area_reserves_scrollbar_before_fitting_controls(self):
+        import ctypes
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            app.show_popup(anchor=(100,100));app.window.update()
+            inset=round(36*app.ui_scale)+2;gap=round(8*app.ui_scale)
+            # Both rows fit without scrolling, but the widest pair must stack
+            # once a vertical scrollbar takes part of the available width.
+            available=max(2*max(app.popup_start.winfo_reqwidth(),app.popup_stop.winfo_reqwidth())+inset+gap,
+                          app.popup_restore_switch.winfo_reqwidth()+app.popup_delay_picker.winfo_reqwidth()+inset+gap)
+            def monitor_info(handle,info_pointer):
+                info=info_pointer._obj
+                for rect in (info.work,info.monitor):
+                    rect.left=rect.top=0;rect.right=available+24;rect.bottom=260
+                return 1
+            with patch.object(ctypes.windll.user32,'GetMonitorInfoW',side_effect=monitor_info):
+                app.position_popup();app.window.update()
+            self.assertTrue(app.popup_scroll.winfo_ismapped())
+            self.assertLessEqual(app.popup.winfo_width(),available)
+            for control in (app.popup_start,app.popup_stop,app.popup_restore_switch,app.popup_delay_picker):
+                self.assertGreaterEqual(control.winfo_width(),control.winfo_reqwidth())
+        finally:app.quit()
 
     def test_short_mixed_dpi_popup_keeps_scrollbar_and_actions_visible(self):
         app = launcher.LauncherUI(enable_tray=False, observe=False)

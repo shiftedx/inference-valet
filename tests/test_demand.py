@@ -1,6 +1,7 @@
 import json
 import pathlib
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -10,10 +11,20 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import ai_demand as demand
+import ai_issues
+
+
+def isolate_diagnostics(test):
+    directory = tempfile.TemporaryDirectory(prefix='valet-demand-test-')
+    test.addCleanup(directory.cleanup)
+    state = pathlib.Path(directory.name)
+    test.enterContext(patch.object(demand, 'STATE_DIR', state))
+    test.enterContext(patch.object(ai_issues, 'STATE_DIR', state))
 
 
 class PolicyTests(unittest.TestCase):
     def setUp(self):
+        isolate_diagnostics(self)
         self.now = 100
         self.detector = Mock(); self.detector.running.return_value = []
         self.gpu = Mock(return_value=dict(util=0, used=1000, free=31000, ram=60, commit=70))
@@ -37,7 +48,21 @@ class PolicyTests(unittest.TestCase):
 
     def test_retained_comfy_models_block_without_eviction(self):
         self.gpu.return_value['used'] = 16000
+        self.guard.options['max_vram_used_mib']=4096
         self.assertIn('left untouched', self.guard.load_reason())
+
+    def test_default_headroom_is_not_a_reference_host_requirement(self):
+        with patch.object(demand,'CONFIG',{}):
+            guard=demand.Guard(self.detector,lambda:dict(util=0,used=6000,free=2000,ram=8,commit=10))
+        self.assertIsNone(guard.load_reason())
+        for key in demand.OPTIONAL_HEADROOM:self.assertIsNone(guard.options[key])
+
+    def test_each_explicit_headroom_limit_is_enforced(self):
+        for key,limit in dict(max_vram_used_mib=500,min_free_vram_mib=32000,min_ram_gib=61,min_commit_gib=71).items():
+            with patch.object(demand,'CONFIG',{}):guard=demand.Guard(self.detector,self.gpu,options={key:limit})
+            self.assertIsNotNone(guard.load_reason(),key)
+        for value in (float('nan'),float('inf'),-1,True):
+            with self.assertRaises(ValueError):demand.Guard(options={'min_ram_gib':value})
 
     def test_resource_failure_blocks(self):
         self.gpu.side_effect = OSError('counter failed')
@@ -55,6 +80,7 @@ class PolicyTests(unittest.TestCase):
 class NativeHTTPTests(unittest.TestCase):
     """Actual Strata HTTP/SSE with an unloaded simulated engine, no GPU needed."""
     def setUp(self):
+        isolate_diagnostics(self)
         from ai_config import STRATA_ROOT
         if not (STRATA_ROOT/'Strata/serve/server.py').is_file():
             self.skipTest('Native HTTP integration requires an external Strata checkout')
@@ -204,10 +230,12 @@ class NativeHTTPTests(unittest.TestCase):
         self.assertEqual(len(attempts),2)
 
     def test_vram_denial_reports_measured_headroom_without_loading(self):
+        self.guard.options['min_free_vram_mib'] = 24000
         self.guard.gpu=lambda:dict(util=0,used=12000,free=18000,ram=60,commit=70)
         code,body=self.post(self.svc.model)
         self.assertEqual(code,503)
-        self.assertIn('18000 MiB free',body)
+        self.assertIn('Free VRAM: 18000 MiB',body)
+        self.assertIn('configured minimum 24000 MiB',body)
         self.assertEqual(self.engine.starts,0)
         self.assertEqual(self.guard.load_issue['code'],'vram_headroom')
         self.guard.gpu=lambda:dict(util=0,used=1000,free=31000,ram=60,commit=70)

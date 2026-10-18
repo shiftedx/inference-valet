@@ -150,12 +150,14 @@ def build_activity(status, metrics, demand, hardware, processes, owned,
             if util is not None and util > options.get('max_gpu_utilization', 20):
                 blockers.append('GPU workload is above the load limit')
             free = (total - used) / 2**20 if used is not None and total is not None and total >= used else None
-            if ((used is not None and used / 2**20 > options.get('max_vram_used_mib', 4096))
-                    or (free is not None and free < options.get('min_free_vram_mib', 24000))):
+            maximum,minimum=_number(options.get('max_vram_used_mib')),_number(options.get('min_free_vram_mib'))
+            if ((used is not None and maximum is not None and used / 2**20 > maximum)
+                    or (free is not None and minimum is not None and free < minimum)):
                 blockers.append('GPU memory headroom is below the load limit')
             ram, commit = _number(hardware.get('ram_free_gib')), _number(hardware.get('commit_free_gib'))
-            if ((ram is not None and ram < options.get('min_ram_gib', 26))
-                    or (commit is not None and commit < options.get('min_commit_gib', 35))):
+            minimum_ram,minimum_commit=_number(options.get('min_ram_gib')),_number(options.get('min_commit_gib'))
+            if ((ram is not None and minimum_ram is not None and ram < minimum_ram)
+                    or (commit is not None and minimum_commit is not None and commit < minimum_commit)):
                 blockers.append('System memory or commit headroom is below the load limit')
     blockers = list(dict.fromkeys(blockers))
     gpu_data = processes if isinstance(processes, dict) else dict(available=True, processes=processes or [])
@@ -177,7 +179,11 @@ def build_activity(status, metrics, demand, hardware, processes, owned,
         else:
             gpu_note = f'{(total-used)/2**30:.1f} / {total/2**30:.1f} GiB free · ' + gpu_note
             if 'GPU memory headroom is below the load limit' in blockers:
-                gpu_note += f" · Load requires {options.get('min_free_vram_mib', 24000)/1024:.1f} GiB free and ≤ {options.get('max_vram_used_mib', 4096)/1024:.1f} GiB used"
+                limits=[]
+                minimum,maximum=_number(options.get('min_free_vram_mib')),_number(options.get('max_vram_used_mib'))
+                if minimum is not None:limits.append(f'≥ {minimum/1024:.1f} GiB free')
+                if maximum is not None:limits.append(f'≤ {maximum/1024:.1f} GiB used')
+                gpu_note += ' · Load requires '+' and '.join(limits)
             if 'GPU workload is above the load limit' in blockers:
                 gpu_note += f" · GPU {hardware['gpu_util']:g}% (load limit {options.get('max_gpu_utilization', 20):g}%)"
         # Newer lifecycle status wins over the earlier metrics sample.

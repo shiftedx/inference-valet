@@ -4,74 +4,50 @@
 
 | Item | Required location / action |
 |---|---|
-| Backend root | Example `C:/AI/Strata-Valet`; actual root may differ |
-| Upstream | Install [Niko1221/Strata](https://github.com/Niko1221/Strata) at `<root>/Strata/`; run its Windows setup; keep its model/dependency licenses |
-| Managed wrappers | Install the three scripts bundled in `backends/strata/` at `<root>/` |
-| Profiles | `<root>/profiles/<preset>.json` and optional matching `.shared-settings.json` |
+| Upstream | Install [Strata](https://github.com/Niko1221/Strata) and models separately; retain their licenses |
+| Backend root | Your existing deployment containing `Strata/` and `profiles/` |
+| Managed wrappers | Install the three scripts from `backends/strata/` at the backend root |
+| Profiles | Existing executable `profiles/<name>.json`; optional matching shared settings |
 | Backend Python | `<root>/Strata/.venv/Scripts/python.exe`, or `strata_python` override |
-| API | Native `/health`, `/v1/models`, `/v1/status`, `/metrics`, load/unload lifecycle; port 8080 |
-
-This integration's preflight/admission sampler requires NVIDIA `nvidia-smi`. Other Strata-supported GPUs need a resource-sampler adaptation before these managed wrappers can be used; unknown resource state blocks loading.
 
 ```powershell
-# Run from the Valet checkout after scripts/setup.ps1.
-.\.venv\Scripts\python.exe scripts/install-strata-integration.py --root C:/AI/Strata-Valet --install-examples
+# Run after scripts/setup.ps1; substitute your existing backend root.
+.\.venv\Scripts\python.exe scripts/install-strata-integration.py --root C:/path/to/Strata-deployment
 ```
 
-The helper copies wrappers and missing examples; it never overwrites existing profiles. Conflicting wrappers require `--replace-wrappers`, a stopped backend and a backup. Do not change an active launcher's files: its graceful-stop record verifies their hashes.
+The helper installs wrappers, not model presets. Keep your working external profiles and model settings. Conflicting wrappers require `--replace-wrappers`, a stopped backend and a backup. Never replace a live launcher's files: graceful-stop verification checks their hashes.
 
-**Examples contain placeholder paths.** Before loading, edit both profile JSON files:
-
-| Field | Set to |
-|---|---|
-| `exe`, `cwd`, `vision.exe` | Actual installed Strata engine/server paths |
-| `args`: `--pack` | Installed pack directory |
-| `args`: `--native` / `--ple-gguf` | Actual GGUF parts for the matching model |
-| `args`: `--mtp`, `--expert-profile` | Installed draft model / expert profile |
-| `tokenizer` | Matching tokenizer directory |
-| `vision.mmproj`, `vision.model` | Matching vision projector / GGUF model |
-| `lib_dirs` | DLL directories from the upstream-generated Windows configuration; do not guess CUDA versions |
-| `model_name` | Model ID served by this configuration |
-
-Reuse a known-working upstream configuration for model/runtime paths. Retain profile structure, vision support, `parallel` and `--max-context`; validate before loading. Examples use the reference host's IQ3_XXS tuning, not universal hardware presets. Compatible native lifecycle baseline: upstream commit `296b59d2f73c8f04a805df29c2fa97655adace78`; re-run native HTTP tests when upgrading.
+Managed resource inspection currently requires NVIDIA `nvidia-smi`. Other Strata-supported GPUs need a compatible resource sampler. Unknown inspection blocks loading. Native lifecycle compatibility must be rechecked when upgrading Strata.
 
 ## Configure Valet
 
-```json
-{
-  "strata_root": "C:/AI/Strata-Valet",
-  "enabled_profiles": ["strata-128k", "strata-3"],
-  "on_demand": {"enabled": true}
-}
-```
+Set `strata_root` in `config.json` to the deployment above. Valet discovers compatible executable JSON profiles from its `profiles/` directory; it does not choose a model, context size or agent count for you. Shared-settings and support JSON files are excluded.
 
-| Key / preset | Meaning |
+| Key | Meaning |
 |---|---|
-| `strata_root` | Managed backend root, containing `Strata/`, wrappers and `profiles/` |
+| `strata_root` | Existing managed backend root |
 | `strata_python` | Optional backend Python override |
+| `enabled_profiles` | Optional list of profile filename stems; omit to discover all compatible profiles |
 | `state_dir` | Optional state override; default `%LOCALAPPDATA%/AIProfiles` |
 | `nvidia_smi` | Optional telemetry executable override |
-| `enabled_profiles` | Nonempty subset of installed preset IDs; examples provide the first and fourth entries below |
-| `strata-128k` → `quality-iq3-xxs` | Legacy ID; example actually uses 160K tokens per agent |
-| `strata-256k` → `quality-iq3-xxs-max-context` | Optional external preset |
-| `strata-2` → `quality-iq3-xxs-agents` | Optional external preset |
-| `strata-3` → `quality-iq3-xxs-agents-3` | Three-agent example |
-| `strata-4` → `quality-iq3-xxs-agents-4` | Optional external preset |
+| `on_demand.enabled` | Optional first-request loading; requires compatible managed wrappers |
 
-- `AI_PROFILES_CONFIG`: alternate config path; relative Valet paths resolve against its directory. Backend JSON model paths should be absolute.
-- Eager mode (`enabled=false`): Valet loads the selected profile; detected games block automatic reloads. Eager mode does not install the native game-triggered unload hook.
-- On-demand mode (`enabled=true`): start an unloaded listener; the first request loads the engine after admission checks. Game grace defaults to 5 seconds; game-exit cooldown defaults to 30 seconds. Active games/unknown state/insufficient headroom return retryable errors.
-- Idle restore: 5/10/15/20/25/30 minutes, default 20. Eager mode reloads the profile; an on-demand listener stays unloaded until a request. Listener recovery is separate and never waits for the idle timer.
-- Manual Unload: disarm immediate listener recovery; optional idle restore still applies. To keep the model unloaded, turn Restore when idle off too.
-- Edit profile: adjust existing presets. Memory exposes engram placement, GPU expert slots, resident RAM budget and VRAM reserve; blank restores backend defaults. Save for next load validates and backs up edits. Active and pending settings remain distinct; the next model load applies them, including a compatible unloaded on-demand listener. Creating arbitrary preset names is not supported.
+- `AI_PROFILES_CONFIG`: alternate config path; relative Valet paths resolve against its directory.
+- No profiles found: check the configured root and external profile format; restart Valet after adding profiles. Loading and editing stay unavailable until a profile is discovered.
+- Eager mode: load a selected profile immediately; detected games block automatic restoration.
+- On-demand mode: start an unloaded listener; the first request loads after admission checks. Game grace defaults to 5 seconds; game-exit cooldown defaults to 30 seconds.
+- Optional resource thresholds are deployment settings. Existing configured thresholds are preserved; Valet supplies no machine-specific RAM, VRAM or page-file recommendations.
+- Idle restore: 5/10/15/20/25/30 minutes, default 20. An on-demand listener remains unloaded until a request.
+- Manual Unload disarms immediate listener recovery; optional idle restore still applies. Turn Restore when idle off to keep it unloaded.
+- Edit profile: adjust supported fields in a discovered profile. Save validates, backs up the original and applies on the next model launch; it never hot-reloads the model.
 
 ## Games / network / startup
 
-- Discover Steam install directories and Windows game records. Add other games to `<state_dir>/idle-settings.json`: `"extra_games": ["C:/Games/MyGame/game.exe"]`.
-- Known game executables remain authoritative. The fallback requires exclusive Direct3D state and a fullscreen foreground process; Valet is identified by its exact executable and script paths. Ordinary desktop busy/presentation states do not identify games. Unknown inspection blocks loading.
-- Preserve other GPU workloads. Defaults require ≥24,000 MiB free VRAM, ≤4,096 MiB used VRAM, ≥26 GiB available RAM and ≥35 GiB commit headroom. These are reference-profile admission thresholds; measure before changing them.
-- Loopback by default. To expose LAN, configure `on_demand.listen_host` intentionally and audit native authentication/firewall settings; Valet does not establish a secure public service.
-- `scripts/install-startup.ps1 -StartNow`: install one sign-in task for this checkout. Close hides to tray; right-click tray → Exit Valet stops monitoring and keeps the backend running.
+- Steam installations and Windows game records are discovered automatically. Add other games to `<state_dir>/idle-settings.json`: `"extra_games": ["C:/Games/MyGame/game.exe"]`.
+- Known game executables remain authoritative. The fallback checks exclusive Direct3D state with a fullscreen foreground process; ordinary desktop presentation state does not identify a game. Unknown inspection blocks loading.
+- Preserve peer GPU workloads; a resource check does not guarantee that a model will fit.
+- Loopback by default. Configure LAN binding, authentication and firewall settings deliberately in your deployment.
+- `scripts/install-startup.ps1 -StartNow`: register sign-in for this checkout. Close hides to tray; tray → Exit Valet stops monitoring and retains running backends.
 
 ## Validate / troubleshoot
 
@@ -83,12 +59,13 @@ Reuse a known-working upstream configuration for model/runtime paths. Retain pro
 
 | Symptom | Action |
 |---|---|
-| Missing profile/model path | Correct external JSON paths; select only installed presets |
-| Port occupied | Inspect current owner; Valet refuses to stop unrelated applications |
-| API absent but process alive | Inspect startup logs; do not force a recovery over the live process |
-| Load blocked by game | Close detected game/fullscreen app; wait cooldown; verify `extra_games` |
-| RAM/commit/VRAM admission failure | Read [Performance](PERFORMANCE.md); preserve peer workloads |
-| Generic shortcut icon | Re-run `scripts/install-shortcuts.ps1` |
+| No profiles | Check `strata_root`, executable profile JSON and optional allowlist |
+| Invalid model path | Correct the external deployment's profile paths |
+| Port occupied | Inspect ownership; Valet preserves unrelated applications |
+| API absent but process alive | Inspect startup logs; do not force recovery over the live process |
+| Game blocks load | Close the detected game; wait for the configured cooldown |
+| Resource admission failure | Check the reported reading and your configured guard |
+| Generic shortcut icon | Rerun `scripts/install-shortcuts.ps1` |
 
 ## Install / upgrade
 
@@ -129,7 +106,7 @@ Config, state, virtual environment, source, external Strata, models, profiles an
 
 ## Test without touching production
 
-Set `AI_PROFILES_CONFIG` to a temporary JSON file with a separate `state_dir` and `on_demand.enabled=true`; omit `enabled_profiles` to exercise all five preset IDs. Point `strata_root` at a compatible Strata checkout for native HTTP tests, or an absent directory for core-only tests. The suite uses a simulated engine, not live model prompts. Install dependencies under the interpreter that runs the suite. Report native skips explicitly.
+Use isolated `AI_PROFILES_CONFIG` and `state_dir` paths. Core tests use temporary profile fixtures and simulated resources; no real model is loaded. Native HTTP integration tests additionally require a compatible external Strata checkout and dependencies; report skipped tests explicitly.
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v

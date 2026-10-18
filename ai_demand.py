@@ -1,5 +1,6 @@
 """Admission policy for the managed Strata HTTP server; no proxy or game hooks."""
 import json
+import math
 import os
 import psutil
 import pathlib
@@ -14,15 +15,18 @@ from ai_issues import record_issue, failure_code
 
 DEFAULTS = dict(poll_seconds=1, grace_seconds=5, cooldown_seconds=30,
                 max_pending=8, request_timeout_seconds=600, load_timeout_seconds=300,
-                max_gpu_utilization=20, max_vram_used_mib=4096,
-                min_free_vram_mib=24000, min_ram_gib=26, min_commit_gib=35, load_retry_seconds=30)
+                max_gpu_utilization=20, max_vram_used_mib=None,
+                min_free_vram_mib=None, min_ram_gib=None, min_commit_gib=None, load_retry_seconds=30)
+
+OPTIONAL_HEADROOM = {'max_vram_used_mib','min_free_vram_mib','min_ram_gib','min_commit_gib'}
 
 
 class Guard:
     def __init__(self, detector=None, gpu=None, clock=time.monotonic, options=None):
         self.options = {**DEFAULTS, **CONFIG.get('on_demand', {}), **(options or {})}
         for key, value in self.options.items():
-            if key in DEFAULTS and (isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0):
+            if key in OPTIONAL_HEADROOM and value is None:continue
+            if key in DEFAULTS and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0):
                 raise ValueError('Invalid on_demand setting: ' + key)
         if self.options['max_pending'] < 1 or self.options['poll_seconds'] < .25:
             raise ValueError('max_pending >= 1 and poll_seconds >= .25 required')
@@ -96,10 +100,15 @@ class Guard:
             self.resource_snapshot = data
             o = self.options
             if data['util'] > o['max_gpu_utilization']: return self.blocked('gpu_busy', f"GPU workload busy: {data['util']:g}% utilization; limit {o['max_gpu_utilization']:g}%")
-            if data['used'] > o['max_vram_used_mib'] or data['free'] < o['min_free_vram_mib']:
-                return self.blocked('vram_headroom', f"VRAM headroom limited: {data['free']:g} MiB free (need >= {o['min_free_vram_mib']:g}); {data['used']:g} MiB used (limit {o['max_vram_used_mib']:g}); retained models are left untouched")
-            if data['ram'] < o['min_ram_gib'] or data['commit'] < o['min_commit_gib']:
-                return self.blocked('ram_headroom', f"Insufficient RAM or Windows commit headroom: RAM {data['ram']:.1f} GiB (need {o['min_ram_gib']:g}); commit {data['commit']:.1f} GiB (need {o['min_commit_gib']:g})")
+            checks=(('max_vram_used_mib','used',False,'vram_headroom','VRAM used','MiB'),
+                    ('min_free_vram_mib','free',True,'vram_headroom','Free VRAM','MiB'),
+                    ('min_ram_gib','ram',True,'ram_headroom','Available RAM','GiB'),
+                    ('min_commit_gib','commit',True,'ram_headroom','Commit headroom','GiB'))
+            for key,metric,minimum,code,label,unit in checks:
+                limit=o[key]
+                if limit is not None and (data[metric]<limit if minimum else data[metric]>limit):
+                    comparison='minimum' if minimum else 'maximum'
+                    return self.blocked(code,f'{label}: {data[metric]:g} {unit}; configured {comparison} {limit:g} {unit}; retained models are left untouched')
         except Exception as exc:
             return self.blocked('resource_unknown', 'Resource state unknown: ' + str(exc))
         return None

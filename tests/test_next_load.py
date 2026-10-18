@@ -73,6 +73,28 @@ class PendingMemoryTests(unittest.TestCase):
         self.assertIsNone(self.svc.vram_reserve)
         self.assertFalse(self.svc.vram_reserve_asked)
 
+    def test_user_named_profile_applies_only_engine_changes_after_owner_verification(self):
+        from ai_profiles import set_argument
+        custom=self.root/'profiles'/'my-local-coder.json'
+        self.profile.rename(custom);self.profile=custom
+        self.record['profile']='my-local-coder';self.active.write_text(json.dumps(self.record))
+        set_argument(self.template['args'],'--expert-cache','123')
+        self.profile.write_text(json.dumps(self.template))
+        before=self.profile.read_bytes()
+        self.assertTrue(next_load.apply_pending_memory(self.svc,self.root))
+        next_load._verify_owner.assert_called_once_with(self.record,self.root)
+        self.assertEqual(argument(self.svc.engine.spawn[1],'--expert-cache'),'123')
+        self.assertEqual(self.profile.read_bytes(),before)
+        self.assertEqual(json.loads(self.runtime.read_text())['parallel'],2)
+
+    def test_long_model_id_does_not_block_pending_engine_changes(self):
+        from ai_profiles import set_argument
+        self.template['model_name']='organization/'+('long-model-component-'*6)
+        set_argument(self.template['args'],'--expert-cache','321')
+        self.profile.write_text(json.dumps(self.template))
+        self.assertTrue(next_load.apply_pending_memory(self.svc,self.root))
+        self.assertEqual(argument(self.svc.engine.spawn[1],'--expert-cache'),'321')
+
     def test_loaded_or_unmanaged_services_are_untouched(self):
         for svc in (SimpleNamespace(), SimpleNamespace(config_path='ignored', loaded=lambda: True,
                     engine=SimpleNamespace(unloaded=True)), SimpleNamespace(config_path='ignored',

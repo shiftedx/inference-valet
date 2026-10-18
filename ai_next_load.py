@@ -13,7 +13,7 @@ import uuid
 
 import psutil
 
-from ai_profiles import PRESETS, ProfileStore, argument, fingerprint, read_object, set_argument
+from ai_profiles import ProfileStore, argument, fingerprint, read_object, safe_stem, set_argument
 
 ENGINE_FLAGS = ('--ple-io', '--expert-cache', '--resident-budget-gib',
                 '--vram-reserve-mib', '--kv-resident', '--prefill',
@@ -99,9 +99,9 @@ def apply_pending_memory(svc, root):
         if not _same_path(record.get('config', ''), runtime):
             raise ValueError('The active Strata profile changed; reload it from Valet.')
         _verify_owner(record, root)
-        key = next((key for key, preset in PRESETS.items() if preset[0] == record.get('profile')), None)
-        if key is None:
-            raise ValueError('The active Strata profile is not a supported Valet profile.')
+        # The verified active record names the actual user profile, not a Valet
+        # tuning preset. ProfileStore enforces filename and directory scope.
+        key = safe_stem(record.get('profile'))
         # Read twice around ProfileStore.load so its parsed data and conflict hashes
         # cannot describe different versions of a concurrently saved profile.
         store = ProfileStore(root, root/'profile-logs'/'.valet-next-load')

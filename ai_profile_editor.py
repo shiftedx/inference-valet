@@ -46,10 +46,10 @@ class ProfileEditor:
         self.field_labels={}
         self.field('Profile','name','Profile name',hint='Name shown in the model selector')
         self.field('Profile','context','Context per agent',hint='Tokens · includes prompt, reasoning and output')
-        self.field('Profile','slots','Agents',choices=('1','2','3','4'),hint='Parallel requests')
+        self.field('Profile','slots','Agents',choices=tuple(dict.fromkeys(('1','2','3','4',str(values['slots'])))),hint='Parallel requests')
         self.field('Profile','max_tokens','Maximum output',hint='Tokens · blank uses the backend default')
-        self.field('Profile','effort','Reasoning effort',choices=('none','low','medium','high'))
-        self.field('Profile','reasoning','Reasoning budget',hint='Tokens · 0 uses no fixed budget')
+        self.field('Profile','effort','Reasoning effort',choices=tuple(dict.fromkeys(('', 'none','low','medium','high',values['effort']))),hint='Blank: backend default')
+        self.field('Profile','reasoning','Reasoning budget',hint='Tokens · blank: backend default')
         self.field('Profile','kv','KV format',choices=tuple(dict.fromkeys(('int8','q4_0','k8v4','fp16',values['kv']))),hint='Memory / quality tradeoff')
         self.field('Memory','ple_io','Engram / PLE placement',choices=('', 'direct', 'mmap', 'ram'),
                    hint='Blank: engine default · direct / mmap: disk · ram: system RAM')
@@ -82,15 +82,21 @@ class ProfileEditor:
         height=max(page.winfo_reqheight() for page in self.pages.values())+body.winfo_reqheight()-self.pages['Profile'].winfo_reqheight()+round(36*self.factor)
         width=round(620*self.factor)
         left,top,right,bottom=monitor_work_area(parent)
-        available_height=max(1,bottom-top-round(48*self.factor))
+        # Tk geometry positions the outer frame; winfo_width/height describe its
+        # client area. Include the actual native border/title bar, whose scale
+        # may differ from Tk's font scale on mixed-DPI displays.
+        border=max(0,self.window.winfo_rootx()-self.window.winfo_x())
+        caption=max(0,self.window.winfo_rooty()-self.window.winfo_y())
+        available_height=max(1,bottom-top-max(round(48*self.factor),caption+border+round(8*self.factor)))
         if height>available_height:
             height=available_height;self.scrollbar.pack(side='right',fill='y')
-        width=min(width,max(1,right-left-round(24*self.factor)))
+        width=min(width,max(1,right-left-max(round(24*self.factor),2*border+round(8*self.factor))))
         self.window.geometry(f'{width}x{height}')
         self.window.resizable(True,False);self.window.minsize(min(round(520*self.factor),width),height)
         self.window.update_idletasks()
         x=parent.winfo_rootx()+(parent.winfo_width()-width)//2;y=parent.winfo_rooty()+round(32*self.factor)
-        x=max(left,min(x,right-width));y=max(top,min(y,bottom-height-round(40*self.factor)))
+        x=max(left,min(x,right-width-2*border))
+        y=max(top,min(y,bottom-height-max(round(40*self.factor),caption+border)))
         self.window.geometry(f'+{x}+{y}')
         self.select_page(initial_page if initial_page in self.pages else 'Profile')
         style_window(self.window);self.window.lift()

@@ -9,4 +9,4 @@
 | [pystray](https://github.com/moses-palmer/pystray) | Tray | LGPL-3.0 |
 | [Lumina](https://github.com/shiftedx/lumina) | README presentation reference; no copied code/artwork | AGPL-3.0 |
 
-Returning-key artwork and screenshots belong to Inference Valet. Microsoft references: [Performance](docs/PERFORMANCE.md). Engines, weights and runtime libraries use their own licenses.
+Folded-V artwork and screenshots belong to Inference Valet. Engines, weights and runtime libraries use their own licenses.

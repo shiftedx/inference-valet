@@ -1,5 +1,5 @@
 """Install managed wrapper templates into an external, stopped Strata root."""
-import argparse,json,pathlib,shutil,time,uuid
+import argparse,json,pathlib,time,uuid
 import psutil
 
 SOURCE=pathlib.Path(__file__).resolve().parents[1]/'backends/strata'
@@ -33,7 +33,7 @@ def require_stopped(root,wrappers):
         except psutil.AccessDenied as exc:
             raise ValueError('Cannot inspect a process candidate. Resolve its identity before replacing wrappers.') from exc
 
-def install(root,examples=False,replace=False):
+def install(root,replace=False):
     root=pathlib.Path(root).resolve()
     if not (root/'Strata/serve/server.py').is_file():
         raise ValueError('Install upstream Strata at <root>/Strata before installing the integration.')
@@ -60,27 +60,15 @@ def install(root,examples=False,replace=False):
             if originals[path] is None:path.unlink(missing_ok=True)
             else:path.write_bytes(originals[path])
         raise
-    created=[]
-    if examples:
-        directory=root/'profiles';directory.mkdir(exist_ok=True)
-        for sample in sorted((SOURCE/'profiles').glob('*.example.json')):
-            target=directory/sample.name.replace('.example.json','.json')
-            if target.exists():continue
-            content=sample.read_text(encoding='utf-8').replace('C:/AI/Strata-Valet',root.as_posix())
-            # Exclusive creation protects existing calibrated profiles.
-            with target.open('x',encoding='utf-8') as output:output.write(content)
-            created.append(target)
-    return dict(wrappers=len(wrappers),created_profiles=len(created),backup=None if backup is None else str(backup))
+    return dict(wrappers=len(wrappers),backup=None if backup is None else str(backup))
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',required=True,type=pathlib.Path)
-    parser.add_argument('--install-examples',action='store_true')
     parser.add_argument('--replace-wrappers',action='store_true')
     args=parser.parse_args()
     try:
-        print(json.dumps(install(args.root,args.install_examples,args.replace_wrappers),indent=2))
-        if args.install_examples:print('Correct placeholder model/runtime paths before loading. Existing profiles were preserved.')
+        print(json.dumps(install(args.root,replace=args.replace_wrappers),indent=2))
     except (ValueError,OSError) as exc:parser.exit(1,str(exc)+'\n')
 
 if __name__=='__main__':main()

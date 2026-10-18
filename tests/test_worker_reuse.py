@@ -8,6 +8,8 @@ ROOT=pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 spec=importlib.util.spec_from_file_location('worker_launcher',ROOT/'ai-launcher.py')
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+from profile_fixtures import configure_launcher
+configure_launcher(a)
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):

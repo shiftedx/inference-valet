@@ -11,6 +11,8 @@ from ai_recovery import RecoveryPolicy
 from ai_issues import failure_code
 spec=importlib.util.spec_from_file_location('recovery_launcher',ROOT/'ai-launcher.py')
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+from profile_fixtures import configure_launcher
+configure_launcher(a)
 
 class RecoveryTests(unittest.TestCase):
     def test_dead_listener_recovery_does_not_wait_for_idle_or_games(self):

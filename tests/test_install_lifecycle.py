@@ -1,5 +1,5 @@
 """Exercise installer boundaries in staged checkouts, never real shell/task locations."""
-import json
+import ctypes
 import os
 import pathlib
 import shutil
@@ -29,6 +29,44 @@ class LifecycleTests(unittest.TestCase):
 
     @staticmethod
     def quote(value):return "'"+str(value).replace("'","''")+"'"
+
+    def test_action_ownership_rejects_extra_arguments_and_path_prefixes(self):
+        self.ps(fr'''. {self.quote(self.root/'scripts/install-support.ps1')}
+$root={self.quote(self.root)}
+$action=[pscustomobject]@{{Execute=(Join-Path $root '.venv\Scripts\pythonw.exe');WorkingDirectory=$root;Arguments=('"'+(Join-Path $root 'ai-launcher.py')+'"')}}
+if(-not(Test-ValetAction $action $root)){{throw 'Owned action rejected'}}
+foreach($arguments in @('"'+(Join-Path $root 'ai-launcher.py')+'" --tray --other','"'+(Join-Path $root 'ai-launcher.py')+'" extra','"'+(Join-Path $root 'ai-launcher.py.evil')+'"','"'+(Join-Path $root 'ai-launcher.py')+'"--tray','"'+(Join-Path $root 'ai-launcher.py')+'"; exit')){{
+ $action.Arguments=$arguments
+ if(Test-ValetAction $action $root -Startup){{throw 'Unexpected arguments accepted'}}
+}}
+$action.Arguments='"'+(Join-Path $root 'ai-launcher.py')+'" --tray'
+if(-not(Test-ValetAction $action $root -Startup)){{throw 'Owned startup rejected'}}
+if(Test-ValetAction $action $root){{throw 'Tray flag accepted on shortcut'}}
+$action.WorkingDirectory=$root+'-foreign'
+if(Test-ValetAction $action $root -Startup){{throw 'Prefix path accepted'}}
+if(Test-ValetPath 'ai-launcher.py' (Join-Path $root 'ai-launcher.py')){{throw 'Relative path accepted'}}''')
+
+    def test_short_and_long_paths_identify_same_owned_action(self):
+        # Exercise real 8.3 names; CI itself commonly puts TEMP under RUNNER~1.
+        buffer=ctypes.create_unicode_buffer(32768)
+        get_short=ctypes.windll.kernel32.GetShortPathNameW
+        get_short.argtypes=[ctypes.c_wchar_p,ctypes.c_wchar_p,ctypes.c_uint]
+        get_short.restype=ctypes.c_uint
+        length=get_short(str(self.root),buffer,len(buffer))
+        if not length or length>=len(buffer):self.skipTest('8.3 aliases unavailable')
+        short=buffer.value
+        if short.lower()==str(self.root).lower():self.skipTest('8.3 names disabled for sandbox volume')
+        self.ps(fr'''. {self.quote(self.root/'scripts/install-support.ps1')}
+$long={self.quote(self.root)};$short={self.quote(short)}
+foreach($pair in @(@($short,$long),@($long,$short))){{
+ $source=$pair[0];$target=$pair[1]
+ $action=[pscustomobject]@{{Execute=(Join-Path $source '.venv\Scripts\pythonw.exe');WorkingDirectory=$source;Arguments=('"'+(Join-Path $source 'ai-launcher.py')+'" --tray')}}
+ if(-not(Test-ValetAction $action $target -Startup)){{throw 'Short/long ownership mismatch'}}
+ $action.Arguments='"'+(Join-Path $source 'ai-launcher.py')+'"'
+ if(-not(Test-ValetAction $action $target)){{throw 'Short/long shortcut mismatch'}}
+ $action.Execute=Join-Path $source '.venv\Scripts\pythonw.exe.foreign'
+ if(Test-ValetAction $action $target){{throw 'Foreign executable accepted'}}
+}}''')
 
     def test_setup_clean_and_upgrade_preserve_config_and_state_without_shortcuts(self):
         (self.root/'requirements.txt').write_text('')

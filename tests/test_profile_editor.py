@@ -11,13 +11,15 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
 spec=importlib.util.spec_from_file_location('editor_launcher',ROOT/'ai-launcher.py')
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
+from profile_fixtures import configure_launcher
+configure_launcher(a)
 from ai_profiles import ProfileStore
 
 class EditorTests(unittest.TestCase):
     def make_store(self,root):
         store=ProfileStore(root/'backend',root/'state');path=store.paths('strata-128k')[0]
         path.parent.mkdir(parents=True)
-        path.write_text(json.dumps(dict(parallel=1,model_name='fixture',args=['--max-context','163840',
+        path.write_text(json.dumps(dict(exe='engine.exe',parallel=1,model_name='fixture',args=['--max-context','163840',
             '--kv','int8','--kv-resident','32768','--prefill','8192'],reasoning_budget_tokens=32768)))
         return store
 
@@ -37,10 +39,19 @@ class EditorTests(unittest.TestCase):
                             for page in ('Profile','Memory','Engine'):
                                 editor.select_page(page);app.window.update()
                                 top=editor.window.winfo_rooty();bottom=top+editor.window.winfo_height()
-                                for widget in (editor.save_button,*editor.fields.values()):
-                                    if widget.winfo_ismapped():
-                                        self.assertGreaterEqual(widget.winfo_rooty(),top)
-                                        self.assertLessEqual(widget.winfo_rooty()+widget.winfo_height(),bottom)
+                                self.assertGreaterEqual(editor.save_button.winfo_rooty(),top)
+                                self.assertLessEqual(editor.save_button.winfo_rooty()+editor.save_button.winfo_height(),bottom)
+                                # A mapped widget may be below the canvas viewport;
+                                # focus navigation must reveal every editable field.
+                                for key,widget in editor.fields.items():
+                                    if editor.field_pages[key]!=page:continue
+                                    widget.focus_force();app.window.update()
+                                    self.assertGreaterEqual(widget.winfo_rooty(),editor.canvas.winfo_rooty())
+                                    self.assertLessEqual(widget.winfo_rooty()+widget.winfo_height(),
+                                                         editor.canvas.winfo_rooty()+editor.canvas.winfo_height())
+                                    self.assertGreaterEqual(widget.winfo_rootx(),editor.canvas.winfo_rootx())
+                                    self.assertLessEqual(widget.winfo_rootx()+widget.winfo_width(),
+                                                         editor.canvas.winfo_rootx()+editor.canvas.winfo_width())
                                 self.assertLessEqual(editor.window.winfo_height(),round(650*factor))
                                 fields=[widget for key,widget in editor.fields.items() if editor.field_pages[key]==page]
                                 self.assertEqual(len({widget.winfo_height() for widget in fields}),1)

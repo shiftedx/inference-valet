@@ -2,6 +2,8 @@
 
 ## 0.3.0
 
+- Discover existing Strata profiles; no bundled model presets or machine-specific memory recommendations.
+
 - Compact dashboard and tray controls; one Strata status beside the idle-restore controls.
 - Aligned tabs, numeric readouts and profile settings; monitor-aware layout and tooltip dismissal.
 - GPU core and memory clocks, memory activity, temperature, power limit and session average power during verified Strata activity. Unsupported readings remain unavailable.

@@ -83,14 +83,24 @@ def servers():
  return found
 
 def validate_profile(key):
+ if key not in PROFILES:raise ValueError('No matching profile. Add a profile JSON under the configured backend profiles directory, then reopen Valet.')
  cfg=PROFILES[key]
  if not pathlib.Path(cfg['command'][0]).is_file():raise ValueError('Strata Python is missing. Check strata_python in config.json.')
- c=json.loads((STRATA/'profiles'/(cfg['profile']+'.json')).read_text(encoding='utf-8-sig'));a=c['args']
- if int(a[a.index('--max-context')+1])!=cfg['context'] or c['parallel']!=cfg['slots']:
+ from ai_profiles import read_object,validate_arguments,argument,fingerprint
+ path=PROFILE_STORE.paths(key)[0]
+ if cfg.get('profile_hash') and fingerprint(path)!=cfg['profile_hash']:
   raise ValueError('The profile changed externally. Restart Valet to refresh its settings.')
- if not c.get('vision',{}).get('gpu') or '--vision' not in a:raise ValueError('This Strata profile requires GPU vision support.')
- for flag in ['--pack','--native','--ple-gguf','--mtp']:
-  if not pathlib.Path(a[a.index(flag)+1]).exists():raise ValueError(f'Missing model path for {flag}. Check the Strata profile file.')
+ c=read_object(path);a=c['args'];validate_arguments(a)
+ if (int(argument(a,'--max-context'))!=cfg['context'] or c.get('parallel',1)!=cfg['slots']
+     or (c.get('model_name') or c.get('model'))!=cfg['model']):
+  raise ValueError('The profile changed externally. Restart Valet to refresh its settings.')
+ # Optional engine assets are validated only when the imported profile uses them.
+ for flag in ['--pack','--native','--ple-gguf','--mtp','--model']:
+  if flag in a:
+   value=argument(a,flag)
+   path=pathlib.Path(value)
+   if not path.is_absolute():path=STRATA/path
+   if not value or not path.exists():raise ValueError(f'Missing model path for {flag}. Check the Strata profile file.')
  return cfg
 
 @contextlib.contextmanager
@@ -229,7 +239,7 @@ def tray_menu(send,busy,current,auto_enabled=lambda:False):
   def checked(entry):return current()==key
   return item(lambda entry:PROFILE_NAMES[key],load,enabled=lambda entry:not busy(),checked=checked,radio=True)
  profiles=[profile_item(k,p) for k,p in PROFILES.items()]
- return pystray.Menu(item('Open dashboard',lambda icon,entry:send('show'),default=True),item('Load model',pystray.Menu(*profiles),enabled=lambda entry:not busy()),item('Unload model',lambda icon,entry:send('stop')),item('Restore when idle',lambda icon,entry:send('auto-toggle'),checked=lambda entry:auto_enabled()),pystray.Menu.SEPARATOR,item('Exit Valet (keep model running)',lambda icon,entry:send('quit'),enabled=lambda entry:not busy()))
+ return pystray.Menu(item('Open dashboard',lambda icon,entry:send('show'),default=True),item('Load model',pystray.Menu(*profiles),enabled=lambda entry:bool(PROFILES) and not busy()),item('Unload model',lambda icon,entry:send('stop')),item('Restore when idle',lambda icon,entry:send('auto-toggle'),checked=lambda entry:auto_enabled()),pystray.Menu.SEPARATOR,item('Exit Valet (keep model running)',lambda icon,entry:send('quit'),enabled=lambda entry:not busy()))
 
 def read_demand_status():
  """Accept status only from a fresh, verified current server identity."""
@@ -263,7 +273,7 @@ def observed_profile():
     cfg=PROFILES[saved]
     if cfg['model']==model and cfg['context']==context and cfg['slots']==slots:return saved,'Running: '+cfg['label']
     from ai_profiles import profile_name
-    return None,'Running: '+profile_name('Strata',context,slots)+' · saved changes pending'
+    return None,'Running: '+profile_name(model,context,slots)+' · saved changes pending'
   except (OSError,ValueError,KeyError,TypeError,psutil.Error):pass
   key=next((k for k,p in PROFILES.items() if p['model']==model and p['context']==context and p['slots']==slots),None)
   return key,'Running: '+(PROFILES[key]['label'] if key else model)
@@ -273,6 +283,10 @@ def observed_profile():
 def diagnose():
  owned=[dict(pid=p.pid,kind=k,created=p.create_time()) for p,k in servers()]
  result=dict(processes=owned,listener=listener_present(socket),demand=read_demand_status())
+ directory=PROFILE_STORE.root/'profiles'
+ result['profile_catalog']=dict(backend_root=str(PROFILE_STORE.root),directory=str(directory),
+  directory_exists=directory.is_dir(),count=len(PROFILES),enabled_profiles=CONFIG.get('enabled_profiles'),
+  discovery_errors=list(getattr(PROFILE_STORE,'discovery_errors',[])))
  try:result['health']=fetch('/health')
  except (OSError,ValueError) as exc:result['health_error']=str(exc)
  for name in ('last-issue','idle-status','recovery-state'):
@@ -305,7 +319,7 @@ class LauncherUI:
   self.hero_profile=tk.StringVar(value='');self.hero_note=tk.StringVar(value='')
   self.popup=None;self.popup_performance=None;self.popup_start=None;self.popup_stop=None;self.popup_picker=None
   self.profile_editor=None
-  self.keys=list(PROFILES);self.selected=tk.StringVar(value=PROFILE_NAMES[self.keys[0]])
+  self.keys=list(PROFILES);self.selected=tk.StringVar(value=PROFILE_NAMES[self.keys[0]] if self.keys else 'No profiles found')
   self.auto_var=tk.BooleanVar(value=self.auto_enabled)
   self.delay_var=tk.StringVar(value=f"{IDLE_SETTINGS.read()['idle_minutes']} min")
   style=ttk.Style(self.window);style.theme_use('clam')
@@ -400,14 +414,18 @@ class LauncherUI:
   self.window.update_idletasks()
   native_window_style(self.window)
   if hidden:self.hide()
+ def selected_profile(self):
+  index=self.picker.current()
+  return self.keys[index] if 0<=index<len(self.keys) else None
  def edit_profile(self,initial_page='Profile'):
   from tkinter import messagebox
   from ai_profile_editor import ProfileEditor
   if self.profile_editor and self.profile_editor.window.winfo_exists():
    self.profile_editor.select_page(initial_page)
    self.profile_editor.window.lift();self.profile_editor.window.focus_force();return
-  if self.active:return
-  key=self.keys[self.picker.current()]
+  if self.active or not self.keys:return
+  key=self.selected_profile()
+  if key is None:return
   try:self.profile_editor=ProfileEditor(self.window,PROFILE_STORE,key,self.save_profile,native_window_style,initial_page=initial_page)
   except (OSError,ValueError,KeyError) as exc:messagebox.showerror('Profile unavailable',str(exc),parent=self.window)
  def save_profile(self,key,values,snapshot):
@@ -416,7 +434,7 @@ class LauncherUI:
    PROFILE_STORE.save(key,values,snapshot);reload_profiles()
   self.keys=list(PROFILES);self.picker.configure(values=[PROFILE_NAMES[k] for k in self.keys])
   if self.popup_picker:self.popup_picker.configure(values=[PROFILE_NAMES[k] for k in self.keys])
-  self.selected.set(PROFILE_NAMES[key]);self.update_controls()
+  self.selected.set(PROFILE_NAMES.get(key,'No profiles found'));self.update_controls()
   if self.performance:self.performance.engine_settings_note.set('Saved · changes apply on the next model load')
  def resize_details(self,expanded):
   self.window.update_idletasks()
@@ -597,6 +615,9 @@ class LauncherUI:
    overflow=natural_height>height
    if overflow:
     scrollbar_width=self.popup_scroll.winfo_reqwidth()
+    # The scrollbar shares the work-area width with the controls. Reconsider
+    # stacking after reserving it, including on short, narrow displays.
+    action_width=self.fit_popup_actions(max(1,available_width-scrollbar_width))
     width=min(available_width,max(width,action_width+scrollbar_width))
     self.popup_canvas.itemconfigure(self.popup_window_item,width=width-scrollbar_width-2)
     self.popup_note.configure(wraplength=max(140,width-scrollbar_width-round(36*self.ui_scale)))
@@ -634,7 +655,8 @@ class LauncherUI:
   self.window.destroy();return True
  def refresh_display(self):
   reason=self.auto_status.get()
-  if not self.auto_enabled:explanation='Automatic restore is paused.'
+  if not self.keys:explanation='Add a profile JSON in '+str(STRATA/'profiles')+' and reopen Valet.'
+  elif not self.auto_enabled:explanation='Automatic restore is paused.'
   elif 'blocked:' in reason:explanation='Waiting for your game to close before restoring.'
   elif 'waiting ' in reason:
    remaining=reason.split('waiting ',1)[1].split(' ',1)[0]
@@ -648,7 +670,7 @@ class LauncherUI:
   else:self.auto_note.pack_forget()
   status=self.status.get()
   if 'start' in self.active:
-   title='Loading model…';profile=PROFILE_NAMES.get(self.keys[self.picker.current()],'')
+   title='Loading model…';profile=PROFILE_NAMES.get(self.selected_profile(),'')
    note='Your current model will be replaced.' if self.current or status.startswith('Running: ') else 'Preparing your model…'
   elif 'stop' in self.active:title='Unloading model…';profile='';note='GPU memory will be freed.'
   elif status.startswith('Action failed:'):title='Action failed';profile='';note=status.removeprefix('Action failed: ')
@@ -697,7 +719,7 @@ class LauncherUI:
   if self.popup:
    helpful=note if title not in ('Ready','Model running','Checking model…','Reading prompt','Generating','Working','Loaded','Restore paused','No model loaded','Loading model','Loading model…') else ''
    if title in ('Unloaded','Waiting for request'):helpful='Loads on next request.'
-   selected=self.keys[self.picker.current()]
+   selected=self.selected_profile()
    if not helpful and self.current and selected!=self.current:helpful='Loaded: '+PROFILE_NAMES.get(self.current,self.current)
    self.popup_helper.set(helpful)
    if helpful:self.popup_note.pack(fill='x',before=self.popup_picker,pady=(0,round(8*self.ui_scale)))
@@ -708,18 +730,20 @@ class LauncherUI:
   self.refresh_display()
   load_label='Switch model' if self.current or self.status.get().startswith('Running: ') or 'start' in self.active else 'Load model'
   self.start_button.configure(text=load_label)
-  self.start_button.configure(state='disabled' if self.active else 'normal')
+  self.start_button.configure(state='disabled' if self.active or not self.keys else 'normal')
   self.stop_button.configure(state='disabled' if 'stop' in self.active else 'normal')
-  self.picker.configure(state='disabled' if self.active else 'readonly')
-  self.edit_button.configure(state='disabled' if self.active else 'normal')
+  self.picker.configure(state='disabled' if self.active or not self.keys else 'readonly')
+  self.edit_button.configure(state='disabled' if self.active or not self.keys else 'normal')
   if self.popup_start:
-   self.popup_start.configure(text=load_label,state='disabled' if self.active else 'normal');self.popup_stop.configure(state='disabled' if 'stop' in self.active else 'normal');self.popup_picker.configure(state='disabled' if self.active else 'readonly')
+   self.popup_start.configure(text=load_label,state='disabled' if self.active or not self.keys else 'normal');self.popup_stop.configure(state='disabled' if 'stop' in self.active else 'normal');self.popup_picker.configure(state='disabled' if self.active or not self.keys else 'readonly')
   if self.tray:
    reading=self.latest_performance;speed=reading.get('live_speed') if time.monotonic()-reading.get('sampled',0)<=15 else None;extra=f" · {speed:.1f} tok/s" if isinstance(speed,(int,float)) else ''
    self.tray.title=('Inference Valet · '+reading.get('state','')+extra+' · '+self.status.get())[:127];self.tray.update_menu()
  def begin(self,action,key=None,automatic=False,recovery=False):
   if action in self.active or (action=='start' and self.active):return
-  key=key or self.keys[self.picker.current()]
+  key=key or self.selected_profile()
+  if action=='start' and key not in PROFILES:
+   self.status.set('No profiles found. Add a profile JSON and reopen Valet.');self.update_controls();return
   if action=='start':self.selected.set(PROFILE_NAMES[key])
   if recovery and not self.recovery_policy.begin(time.time()):return
   if recovery:self.notify_issue(record_issue('listener_down','Strata API listener disappeared; restoring unloaded listener',profile=key))
@@ -879,8 +903,7 @@ def main():
   if sys.stdout:print(text,flush=True)
  if a.diagnose:report(json.dumps(diagnose(),indent=2))
  elif a.list:
-  for k,v in PROFILES.items():validate_profile(k)
-  report(json.dumps({k:{f:p[f] for f in ['label','engine','context','slots']} for k,p in PROFILES.items()},indent=2))
+  report(json.dumps({k:{f:p[f] for f in ['label','engine','model','profile','context','slots']} for k,p in PROFILES.items()},indent=2))
  elif a.check_ui:report(str(gui(check=True)))
  elif a.start:report(json.dumps(start_profile(a.start,report)))
  elif a.stop:
