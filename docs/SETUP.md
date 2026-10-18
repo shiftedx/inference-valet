@@ -83,7 +83,7 @@ For a Git release checkout after backing up local changes and exiting Valet:
 
 ```powershell
 git fetch --tags origin
-git switch --detach v0.3.0
+git switch --detach v0.3.1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 

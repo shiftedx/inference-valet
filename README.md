@@ -6,13 +6,13 @@
 Automatic game detection, model loading and idle restore for Strata on Windows.</p>
 
 <p align="center">
-  <img src="docs/assets/version.svg" alt="Version 0.3.0">
+  <img src="docs/assets/version.svg" alt="Version 0.3.1">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-a5c6af" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/Python-3.11%2B-a5c6af" alt="Python 3.11+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a5c6af" alt="MIT license"></a>
 </p>
 
-<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.0">Download v0.3.0</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
+<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.1">Download v0.3.1</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
 <p align="center"><a href="docs/assets/panel.png"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></a></p>
 
@@ -74,7 +74,7 @@ notepad .\config.json
 |---|---|
 | Upgrade | Exit Valet; update application files; rerun `scripts/setup.ps1` · [Preserve config and state](docs/SETUP.md#install--upgrade) |
 | Uninstall | Exit Valet; run `scripts/uninstall.ps1` · [Removal and retained data](docs/SETUP.md#uninstall) |
-| Changes | [v0.3.0](CHANGELOG.md) |
+| Changes | [v0.3.1](CHANGELOG.md) |
 
 ## Startup / checks
 

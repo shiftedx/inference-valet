@@ -1,5 +1,14 @@
 # Changes
 
+## 0.3.1
+
+- Themed tray menu: shared colors, buttons, selected profiles, busy states.
+- Keyboard navigation; monitor bounds; scrolling; outside-click dismissal.
+- Long profile names: compact labels, agent/context details, hover tooltips.
+- Hidden status: 10-second heartbeat; 80% fewer scheduled checks.
+- Visible telemetry: 2-second refresh; immediate refresh on open.
+- Game priority, cancellation, recovery and manual Unload preserved.
+
 ## 0.3.0
 
 - Discover existing Strata profiles; no bundled model presets or machine-specific memory recommendations.
