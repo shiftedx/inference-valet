@@ -10,6 +10,7 @@
 - Managed JSON requires `exe`, `model_name` (or `model`) and an `args` list containing `--max-context`; `parallel` is optional. Keep upstream model/runtime paths valid.
 - Use the deployment's existing model paths, context, concurrency and generation settings.
 - HTTP: `/health`, `/v1/models`, `/v1/status`, `/metrics`; default port `8080`.
+- Authenticated Strata: set `strata_api_key` in Valet's local `config.json` (or `STRATA_API_KEY` in the environment). Valet authenticates telemetry and passes the key to the backend through its environment. View or copy the masked token in the dashboard details → API access tab. Restart Valet after changing it; managed scripts must forward `STRATA_API_KEY` to Strata.
 
 ## Profile discovery
 

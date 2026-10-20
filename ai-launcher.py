@@ -141,8 +141,13 @@ def stop_all(report=lambda _:None):
  if alive or servers():raise RuntimeError('An AI server is still stopping. Retry Stop AI before starting another profile.')
  report('AI servers stopped.' if owned else 'No Strata server was running.')
 
+def strata_api_key():
+ return str(CONFIG.get('strata_api_key') or os.environ.get('STRATA_API_KEY') or '').strip()
+
 def fetch(path):
- with urllib.request.urlopen('http://127.0.0.1:8080'+path,timeout=3) as r:return json.load(r)
+ key=strata_api_key()
+ request=urllib.request.Request('http://127.0.0.1:8080'+path,headers={'Authorization':'Bearer '+key} if key else {})
+ with urllib.request.urlopen(request,timeout=3) as r:return json.load(r)
 
 def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel=None):
  with control_lock():
@@ -154,6 +159,7 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
    if sock.connect_ex(('127.0.0.1',8080))==0:raise RuntimeError('Port 8080 belongs to another application. It was not stopped.')
   LOGS.mkdir(parents=True,exist_ok=True);log=LOGS/(time.strftime('%Y%m%d-%H%M%S')+'-'+key+'.log')
   env=dict(os.environ);env.pop('STRATA_LAUNCH_VERIFY',None);env['PYTHONFAULTHANDLER']='1'
+  if backend_key:=strata_api_key():env['STRATA_API_KEY']=backend_key
   if CONFIG.get('on_demand',{}).get('enabled'):
    env['STRATA_VALET_ROOT']=str(ROOT)
    if CONFIG.get('on_demand',{}).get('listen_host'):
@@ -392,6 +398,11 @@ class LauncherUI:
   self.performance=PerformancePanel(frame,status_parent=self.status_strip) if not stop else None
   self.collector=Collector(fetch,servers,read_demand_status);self.latest_performance={}
   if self.performance:
+   from ai_api_access import ApiAccessPanel
+   api_tab=tk.Frame(self.performance.details_notebook,bg=THEME['bg'],padx=round(8*self.ui_scale),pady=round(8*self.ui_scale))
+   self.performance.details_notebook.add(api_tab,text='API access')
+   self.performance.detail_tabs['API access']=api_tab
+   self.api_access=ApiAccessPanel(api_tab,strata_api_key);self.api_access.pack(fill='x')
    self.performance.on_layout=fit_dashboard
    self.performance.on_edit_engine=lambda:self.edit_profile(initial_page='Memory')
    self.performance.pack(fill='both',expand=True)

@@ -27,6 +27,7 @@ Set `strata_root` in `config.json` to the deployment above. Valet discovers comp
 |---|---|
 | `strata_root` | Existing managed backend root |
 | `strata_python` | Optional backend Python override |
+| `strata_api_key` | Optional native Strata API key; otherwise use `STRATA_API_KEY` |
 | `enabled_profiles` | Optional list of profile filename stems; omit to discover all compatible profiles |
 | `state_dir` | Optional state override; default `%LOCALAPPDATA%/AIProfiles` |
 | `nvidia_smi` | Optional telemetry executable override |
