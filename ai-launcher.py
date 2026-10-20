@@ -1,5 +1,5 @@
 """One desktop picker and stop action for the installed Strata server."""
-import argparse,contextlib,json,msvcrt,os,pathlib,queue,secrets,socket,subprocess,sys,threading,time,urllib.request
+import argparse,contextlib,json,msvcrt,os,pathlib,queue,secrets,socket,subprocess,sys,threading,time,urllib.error,urllib.request
 import psutil
 from concurrent.futures import ThreadPoolExecutor
 
@@ -149,6 +149,25 @@ def fetch(path):
  request=urllib.request.Request('http://127.0.0.1:8080'+path,headers={'Authorization':'Bearer '+key} if key else {})
  with urllib.request.urlopen(request,timeout=3) as r:return json.load(r)
 
+def load_model():
+ """Warm only a verified managed listener; surface admission/load failures."""
+ listener=strata_listener(servers())
+ if listener is None:raise RuntimeError('Cannot load Strata: listener ownership could not be verified.')
+ key=strata_api_key();base='http://127.0.0.1:8080'
+ request=urllib.request.Request(base+'/load',data=b'{}',headers={
+  'Content-Type':'application/json','Origin':base,**({'Authorization':'Bearer '+key} if key else {})})
+ try:
+  with urllib.request.urlopen(request,timeout=330) as response:result=json.load(response)
+ except urllib.error.HTTPError as exc:
+  try:message=json.load(exc).get('error',{}).get('message')
+  except (ValueError,AttributeError):message=None
+  raise RuntimeError('Strata load failed: '+str(message or f'HTTP {exc.code}')) from None
+ except (OSError,ValueError) as exc:
+  raise RuntimeError('Strata load failed: '+str(exc)) from None
+ if result.get('status')!='loaded':raise RuntimeError('Strata did not confirm that the model loaded.')
+ if not listener.is_running() or strata_listener([(listener,'strata-server')]) is None:
+  raise RuntimeError('Strata listener changed while loading; readiness could not be verified.')
+
 def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel=None):
  with control_lock():
   cfg=validate_profile(key)
@@ -170,7 +189,7 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
   if not automatic_guard:IDLE_SETTINGS.update(last_profile=key)
   if CONFIG.get('on_demand',{}).get('enabled'):IDLE_SETTINGS.update(demand_armed=True)
  report('Loading '+cfg['label']+' ...')
- deadline=time.monotonic()+600;next_game_check=0
+ deadline=time.monotonic()+600;next_game_check=0;load_requested=False
  while time.monotonic()<deadline:
   if (LOGS/'last-stop.txt').exists() and int((LOGS/'last-stop.txt').read_text())>started:
    report('Startup cancelled by Stop AI or a profile switch.');return dict(profile=key,cancelled=True)
@@ -189,7 +208,18 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
     if cfg['engine']=='strata':
      status=fetch('/v1/status')
      if CONFIG.get('on_demand',{}).get('enabled') and not status.get('loaded'):
-      fetch('/health');report('Waiting for request: '+cfg['label']);return dict(profile=key,model=cfg['model'],log=str(log))
+      if automatic_guard:
+       fetch('/health');report('Waiting for request: '+cfg['label']);return dict(profile=key,model=cfg['model'],log=str(log),unloaded=True)
+      if load_requested:raise RuntimeError('Strata became unloaded before startup readiness could be confirmed.')
+      # A manual Load model action must warm the lazy server, not stop at API readiness.
+      report('Loading '+cfg['label']+' ...')
+      try:load_model()
+      except RuntimeError:
+       if (LOGS/'last-stop.txt').exists() and int((LOGS/'last-stop.txt').read_text())>started:
+        report('Startup cancelled by Stop AI or a profile switch.');return dict(profile=key,cancelled=True)
+       raise
+      load_requested=True
+      continue # Re-read native readiness and re-check cancellation before reporting success.
      if not status.get('loaded') or status['context']['native']!=cfg['context'] or status['concurrency']['serving']!=cfg['slots']:raise ValueError('Still loading')
     fetch('/health');report('Ready: '+cfg['label']+' — http://127.0.0.1:8080');return dict(profile=key,model=cfg['model'],log=str(log))
   except (OSError,ValueError,KeyError):pass
@@ -835,6 +865,8 @@ class LauncherUI:
      if self.popup and self.popup.state()!='withdrawn':self.position_popup()
    elif kind in ['done','error']:
     action=payload[0];self.active.discard(action)
+    # Samples taken while replacing the listener cannot describe the completed action.
+    self.epoch+=1;self.latest_performance={}
     if action=='start':self.recovery_policy.finished()
     if kind=='error':
      issue=record_issue(failure_code(payload[1]),payload[1],action=action)
@@ -844,7 +876,7 @@ class LauncherUI:
       with (LOGS/'idle-errors.log').open('a',encoding='utf-8') as log:log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+payload[1]+'\n')
      else:self.show();messagebox.showerror('Inference Valet',payload[1],parent=self.window)
     elif action=='stop':self.current=None
-    elif not (payload[2] or {}).get('cancelled'):self.current=payload[1]
+    elif not (payload[2] or {}).get('cancelled'):self.current=None if (payload[2] or {}).get('unloaded') else payload[1]
     self.update_controls()
     if self.stop_only and not self.active and self.quit():return
   if self.latest_performance.get('activity') and time.monotonic()-self.latest_performance.get('sampled',0)>15 and not getattr(self,'reading_stale',False):
