@@ -28,9 +28,10 @@ def main():
     server_scripts=[]
     for p in [server,*server.children(recursive=True)]:
         try:
+            if p.name().lower() not in ('python.exe','pythonw.exe'):continue
             args=p.cmdline()
             if len(args)>1 and pathlib.Path(args[1]).resolve()==(root/'managed_strata_server.py').resolve():server_scripts.append(p)
-        except psutil.NoSuchProcess:pass
+        except (psutil.NoSuchProcess,psutil.AccessDenied):pass
     if not server_scripts:raise RuntimeError('Server is not the verified managed script')
     path=logs/state['stop_file']
     if path.parent!=logs or path.name!='stop-'+state['token']+'.request':raise RuntimeError('Invalid stop request path')

@@ -1,5 +1,12 @@
 # Changes
 
+## Unreleased
+
+- API access details: masked token field, eye reveal/hide and Copy; automatically mask when leaving the tab.
+
+- Authenticate Strata telemetry, launch verification and unload requests; forward configured API keys through the backend environment.
+- Graceful stop skips inaccessible native children while retaining launcher ownership, process identity and script provenance checks.
+
 ## 0.3.1
 
 - Themed tray menu: shared colors, buttons, selected profiles, busy states.

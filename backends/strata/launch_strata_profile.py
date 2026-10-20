@@ -11,7 +11,16 @@ def commit_headroom():
 ROOT=pathlib.Path(__file__).resolve().parent
 INSTALL=ROOT/'Strata'
 PY=INSTALL/'.venv/Scripts/python.exe'
-def fetch(path,base):return json.load(urllib.request.urlopen(base+path,timeout=10))
+def api_headers():
+    key=os.environ.get('STRATA_API_KEY','').strip()
+    return {'Authorization':'Bearer '+key} if key else {}
+
+def api_request(url,**kwargs):
+    headers=dict(kwargs.pop('headers',{}));headers.update(api_headers())
+    return urllib.request.Request(url,headers=headers,**kwargs)
+
+def fetch(path,base):
+    with urllib.request.urlopen(api_request(base+path),timeout=10) as response:return json.load(response)
 def profile_path(name):
     # Keep the standalone wrapper's filename contract aligned with Valet discovery.
     if (not isinstance(name,str) or not name or name.startswith('-') or name in ('.','..')
@@ -78,7 +87,7 @@ def main():
         run.with_suffix('.shared-settings.json').write_text(json.dumps(defaults,indent=2))
     print(f"Starting {a.profile}: {cfg['parallel']} agent(s), total window {cfg['args'][cfg['args'].index('--max-context')+1]} tokens per agent")
     print(f'Local API: {base}/v1   Web UI: {base}   Bind: {bind}:{port}')
-    if bind=='0.0.0.0':print(f'LAN API: http://{socket.gethostname()}:{port}/v1 (or this PC\'s LAN IP); unauthenticated, subject to the existing firewall.')
+    if bind=='0.0.0.0':print(f'LAN API: http://{socket.gethostname()}:{port}/v1 (or this PC\'s LAN IP); subject to Strata authentication and the existing firewall.')
     print('Press Ctrl+C in this window to stop gracefully. Logs:',logs)
     token=secrets.token_hex(24);stopfile=logs/('stop-'+token+'.request');statefile=logs/'active-profile.json'
     env=dict(os.environ,STRATA_LOCAL_STOP_FILE=str(stopfile),STRATA_LOCAL_STOP_TOKEN=token)
@@ -111,7 +120,7 @@ def main():
             if (not a.on_demand and margin is not None and margin<1) or (low is not None and time.monotonic()-low>=3):
                 rejected.set();print(f'MEMORY GUARD: stopping this Strata server. Commit headroom {margin} GiB, RAM {ram:.2f} GiB.',flush=True)
                 try:
-                    req=urllib.request.Request(base+'/unload',data=b'{}',headers={'Content-Type':'application/json','Origin':base})
+                    req=api_request(base+'/unload',data=b'{}',headers={'Content-Type':'application/json','Origin':base})
                     urllib.request.urlopen(req,timeout=5).close()
                 except Exception:pass
                 try:
@@ -138,7 +147,7 @@ def main():
                             lanbase=f'http://{lan}:{port}'
                             evidence['lan']=dict(url=lanbase,health=fetch('/health',lanbase),models=fetch('/v1/models',lanbase))
                             body=dict(model=cfg['model_name'],messages=[dict(role='user',content='Reply with only the digit 4.')],max_tokens=8,temperature=0,enable_thinking=False,chat_template_kwargs={'enable_thinking':False})
-                            req=urllib.request.Request(lanbase+'/v1/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Origin':lanbase})
+                            req=api_request(lanbase+'/v1/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Origin':lanbase})
                             answer=json.load(urllib.request.urlopen(req,timeout=60))
                             evidence['lan']['same_origin_inference']=dict(model=answer.get('model'),content=answer['choices'][0]['message']['content'])
                             evidence['lan']['same_origin_pass']=answer['choices'][0]['message']['content'].strip()=='4'
@@ -148,7 +157,7 @@ def main():
                                 urllib.request.urlopen(req,timeout=10).close();raise RuntimeError('Foreign browser Origin was unexpectedly allowed')
                             except urllib.error.HTTPError as e:
                                 evidence['lan']['foreign_origin_status']=e.code
-                                if e.code!=403:raise
+                                if e.code not in (401,403):raise
                             listeners=[]
                             for p in [psutil.Process(child.pid),*psutil.Process(child.pid).children(recursive=True)]:
                                 try:
@@ -158,7 +167,7 @@ def main():
                             evidence['listeners']=listeners
                         print('LAUNCH VERIFIED',json.dumps(evidence))
                         (logs/f'{a.profile}-{stamp}-verification.json').write_text(json.dumps(evidence,indent=2))
-                        req=urllib.request.Request(base+'/unload',data=b'{}',headers={'Content-Type':'application/json','Origin':base})
+                        req=api_request(base+'/unload',data=b'{}',headers={'Content-Type':'application/json','Origin':base})
                         print('Graceful engine unload:',urllib.request.urlopen(req,timeout=60).read().decode())
                         return 0
                 except RuntimeError:raise
