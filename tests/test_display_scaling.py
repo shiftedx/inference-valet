@@ -131,10 +131,11 @@ class DisplayScalingTests(unittest.TestCase):
         self.assertEqual(app.window.state(), 'withdrawn')
         self.assertFalse(old_popup.winfo_exists())
         self.assertEqual(app.popup.state(), 'normal')
-        self.assertAlmostEqual(app.popup_performance.scale, 2, places=2)
+        # Tk derives scaling from the virtual display's rounded millimetre dimensions.
+        self.assertAlmostEqual(app.popup_performance.scale, 2, delta=.02)
         self.change(96)
         self.assertEqual(app.window.state(), 'withdrawn')
-        self.assertAlmostEqual(app.popup_performance.scale, 1, places=2)
+        self.assertAlmostEqual(app.popup_performance.scale, 1, delta=.02)
 
     def test_poll_detects_change_and_stable_display_does_not_rebuild(self):
         app = self.app
