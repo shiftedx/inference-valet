@@ -184,6 +184,8 @@ class RequestTrend(tk.Canvas):
   self.hide_tip();self.tip=tk.Toplevel(self);self.tip.withdraw();self.tip.overrideredirect(True)
   self.tip.geometry(f'+{event.x_root+12}+{event.y_root+12}')
   tk.Label(self.tip,text='Up to 12 completed requests; scale fits the values.',bg=THEME['card'],fg=THEME['muted'],font=ui_font('caption'),padx=8,pady=4,justify='left').pack()
+  from ai_display import refresh_fonts
+  self.tip._display_fonts=refresh_fonts(self.tip)
   reveal_tooltip(self.tip,self)
  def hide_tip(self,event=None):
   if self.tip:self.tip.destroy();self.tip=None
@@ -216,6 +218,8 @@ class StatusMark(tk.Label):
   anchor=getattr(self,'anchor_widget',self)
   self.tip.geometry(f'+{anchor.winfo_rootx()}+{anchor.winfo_rooty()+anchor.winfo_height()+4}')
   tk.Label(self.tip,text=text,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),padx=8,pady=5,wraplength=360,justify='left').pack()
+  from ai_display import refresh_fonts
+  self.tip._display_fonts=refresh_fonts(self.tip)
   reveal_tooltip(self.tip,anchor)
  def hide_tip(self,event=None):
   if self.tip:self.tip.destroy();self.tip=None
@@ -266,7 +270,7 @@ class GpuTuningPanel(tk.Frame):
 
 class PerformancePanel:
  def __init__(self, parent, compact=False, status_parent=None):
-  self.on_edit_engine=lambda:None
+  self.on_edit_engine=lambda:None;self._plot_fonts={}
   from tkinter import ttk
   self.compact=compact;self.samples=deque(maxlen=120);self.history=deque(maxlen=120);self.identity=None;self.latest={};self.on_layout=lambda:None;self.on_details=lambda expanded:None;self.request_history=deque(maxlen=12);self.last_request=None
   self.scale=float(parent.tk.call('tk','scaling'))/(96/72)
@@ -374,12 +378,12 @@ class PerformancePanel:
   style=ttk.Style(parent)
   style.configure('Valet.TNotebook',background=THEME['bg'],borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],tabposition='n',tabmargins=(0,0,0,round(8*self.scale)))
   tab_padding=(round(16*self.scale),round(8*self.scale))
-  style.configure('Valet.TNotebook.Tab',background=THEME['bg'],foreground=THEME['muted'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],padding=tab_padding,font=ui_font('caption'),anchor='center',width=12)
+  style.configure('Valet.TNotebook.Tab',background=THEME['bg'],foreground=THEME['muted'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],padding=tab_padding,font=self._plot_font('caption'),anchor='center',width=12)
   # Clam's inherited selected padding is asymmetric (6,4,6,2), which
   # moves the active label below its neighbours even with a base padding.
   style.map('Valet.TNotebook.Tab',padding=[('selected',tab_padding),('!selected',tab_padding)],expand=[('selected',(0,0,0,0))],background=[('selected',THEME['selected']),('active',THEME['raised'])],foreground=[('selected',THEME['text'])],bordercolor=[('selected',THEME['bg'])],lightcolor=[('selected',THEME['bg'])],darkcolor=[('selected',THEME['bg'])])
-  style.configure('Valet.Treeview',background=THEME['card'],fieldbackground=THEME['card'],foreground=THEME['text'],font=ui_font('caption'),rowheight=round(24*self.scale),borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
-  style.configure('Valet.Treeview.Heading',background=THEME['raised'],foreground=THEME['muted'],font=ui_font('caption'),relief='flat',bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
+  style.configure('Valet.Treeview',background=THEME['card'],fieldbackground=THEME['card'],foreground=THEME['text'],font=self._plot_font('caption'),rowheight=round(24*self.scale),borderwidth=0,bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
+  style.configure('Valet.Treeview.Heading',background=THEME['raised'],foreground=THEME['muted'],font=self._plot_font('caption'),relief='flat',bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'])
   style.map('Valet.Treeview',background=[('selected',THEME['selected'])],foreground=[('selected',THEME['text'])])
   style.map('Valet.Treeview.Heading',background=[('active',THEME['line'])])
   self.details_notebook=ttk.Notebook(self.detail_container,style='Valet.TNotebook',height=round(290*self.scale),takefocus=True)
@@ -404,7 +408,7 @@ class PerformancePanel:
   self.edit_engine_button=Button(engine_header,text='Edit selected profile',quiet=True,command=lambda:self.on_edit_engine())
   self.edit_engine_button.pack(side='right')
   self.engine_table=self._table(self.detail_tabs['Engine'],(('setting','Setting',210),('value','Value',270),('source','Source',145)),8)
-  self.engine_table.tag_configure('group',foreground=THEME['muted'],font=ui_font('caption',True))
+  self.engine_table.tag_configure('group',foreground=THEME['muted'],font=self._plot_font('caption',True))
   self.engine_table.bind('<Configure>',lambda event:self._fit_engine_values())
   self.engine_table.bind('<Motion>',self._engine_hover)
   self.engine_table.bind('<Leave>',self._hide_engine_tip)
@@ -501,7 +505,7 @@ class PerformancePanel:
 
  def _fit_engine_values(self):
   import tkinter.font as tkfont
-  table=self.engine_table;font=tkfont.Font(root=table,font=ui_font('caption'))
+  table=self.engine_table;font=tkfont.Font(root=table,font=self._plot_font('caption'))
   for item,row in zip(table.get_children(),getattr(self,'engine_rows',[])):
    values=[]
    for column,value in zip(table['columns'],row):
@@ -539,14 +543,20 @@ class PerformancePanel:
    self.engine_tip_after=None
    tip=tk.Toplevel(table);self.engine_tip=tip;tip.withdraw();tip.overrideredirect(True)
    tip.configure(bg=THEME['line'])
-   tk.Label(tip,text=raw,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),padx=8,pady=5,wraplength=round(480*self.scale),justify='left').pack(padx=1,pady=1)
+   tk.Label(tip,text=raw,bg=THEME['card'],fg=THEME['text'],font=self._plot_font('caption'),padx=8,pady=5,wraplength=round(480*self.scale),justify='left').pack(padx=1,pady=1)
    tip.update_idletasks();x=min(event.x_root+12,tip.winfo_screenwidth()-tip.winfo_reqwidth()-10);y=min(event.y_root+18,tip.winfo_screenheight()-tip.winfo_reqheight()-10)
    tip.geometry(f'+{max(0,x)}+{max(0,y)}');reveal_tooltip(tip,table)
   self.engine_tip_after=self.frame.after(450,show)
 
+ def _plot_font(self,role='caption',bold=False):
+  from tkinter import font as tkfont
+  key=(role,bold)
+  if key not in self._plot_fonts:self._plot_fonts[key]=tkfont.Font(root=self.frame,font=ui_font(role,bold))
+  return self._plot_fonts[key]
+
  def _label(self,parent,text='',size='body',bold=False,color=None,variable=None,wrap=0):
   return tk.Label(parent,text=text,textvariable=variable,bg=parent.cget('bg'),fg=color or THEME['text'],
-                  font=ui_font(size,bold),anchor='w',justify='left',wraplength=wrap,bd=0)
+                  font=self._plot_font(size,bold),anchor='w',justify='left',wraplength=wrap,bd=0)
 
  def pack(self,**kwargs):self.frame.pack(**kwargs)
 
@@ -762,12 +772,12 @@ class PerformancePanel:
   c=self.agent_activity;c.delete('all');s=self.latest
   capacity=number(s.get('capacity'));active=number(s.get('running'))
   if capacity is None or active is None:
-   c.create_text(0,11*self.scale,text='Activity unavailable',anchor='w',fill=THEME['muted'],font=ui_font('caption'));return
+   c.create_text(0,11*self.scale,text='Activity unavailable',anchor='w',fill=THEME['muted'],font=self._plot_font('caption'));return
   for index in range(min(4,int(capacity))):
    x=index*22*self.scale;y=11*self.scale
    c.create_oval(x,y-4*self.scale,x+8*self.scale,y+4*self.scale,fill=THEME['success'] if index<active else THEME['line'],outline='')
   label=f'{capacity:.0f} '+('agent' if capacity==1 else 'agents')
-  c.create_text(min(4,int(capacity))*22*self.scale,11*self.scale,text=label,anchor='w',fill=THEME['muted'],font=ui_font('caption'))
+  c.create_text(min(4,int(capacity))*22*self.scale,11*self.scale,text=label,anchor='w',fill=THEME['muted'],font=self._plot_font('caption'))
 
  def draw_context(self):
   if self.compact:return
@@ -780,7 +790,7 @@ class PerformancePanel:
    if percent is not None:c.create_rectangle(x,6*self.scale,x+cell*min(1,max(0,percent)),11*self.scale,fill=THEME['accent'],outline='')
    tokens=lambda value:'—' if value is None else f'{value/1024:.0f}K' if value>=1024 else f'{value:.0f}'
    text=f"Agent {index+1} · {tokens(used)} / {tokens(limit)} tokens"
-   c.create_text(x,24*self.scale,text=text,anchor='w',fill=THEME['muted'],font=ui_font('caption'))
+   c.create_text(x,24*self.scale,text=text,anchor='w',fill=THEME['muted'],font=self._plot_font('caption'))
 
  def draw(self):
   if self.compact:return
@@ -792,11 +802,11 @@ class PerformancePanel:
    for fraction in (0,.5,1):
     y=bottom-(bottom-top)*fraction
     c.create_line(left,y,right,y,fill=THEME['line'],dash=(2,5))
-   if values or key!='output':c.create_text(left,2*self.scale,text=f"{maximum:.0f}"+(' tok/s' if key=='output' else '%'),anchor='nw',fill=THEME['muted'],font=ui_font('caption'))
-   c.create_text(left,h-2*self.scale,text='−60s',anchor='sw',fill=THEME['muted'],font=ui_font('caption'))
-   c.create_text(right,h-2*self.scale,text='now',anchor='se',fill=THEME['muted'],font=ui_font('caption'))
+   if values or key!='output':c.create_text(left,2*self.scale,text=f"{maximum:.0f}"+(' tok/s' if key=='output' else '%'),anchor='nw',fill=THEME['muted'],font=self._plot_font('caption'))
+   c.create_text(left,h-2*self.scale,text='−60s',anchor='sw',fill=THEME['muted'],font=self._plot_font('caption'))
+   c.create_text(right,h-2*self.scale,text='now',anchor='se',fill=THEME['muted'],font=self._plot_font('caption'))
    if not values:
-    c.create_text(w/2,h/2,text='No live output' if key=='output' else 'Reading unavailable',fill=THEME['muted'],font=ui_font('caption'));continue
+    c.create_text(w/2,h/2,text='No live output' if key=='output' else 'Reading unavailable',fill=THEME['muted'],font=self._plot_font('caption'));continue
    end=self.history[-1]['time'];segment=[]
    def paint(points):
     if len(points)>=4:

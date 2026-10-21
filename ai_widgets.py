@@ -112,6 +112,8 @@ class Tooltip:
         widget=self.widget;factor=scale(widget)
         self.tip=tk.Toplevel(widget);self.tip.withdraw();self.tip.overrideredirect(True)
         tk.Label(self.tip,text=text,bg=THEME['card'],fg=THEME['text'],font=ui_font('caption'),justify='left',wraplength=round(340*factor),padx=round(8*factor),pady=round(4*factor)).pack()
+        from ai_display import refresh_fonts
+        self.tip._display_fonts=refresh_fonts(self.tip)
         self.tip.update_idletasks()
         left,top,right,bottom=monitor_work_area(widget)
         x=max(left,min(widget.winfo_rootx(),right-self.tip.winfo_reqwidth()))
