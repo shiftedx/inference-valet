@@ -756,6 +756,9 @@ class LauncherUI:
    user.MonitorFromPoint.argtypes=[wintypes.POINT,wintypes.DWORD];user.MonitorFromPoint.restype=wintypes.HANDLE
    monitor=user.MonitorFromPoint(wintypes.POINT(*self.popup_monitor_anchor),2)
    info=MonitorInfo();info.cbSize=ctypes.sizeof(info)
+   # ctypes signatures belong to the shared DLL function. The display probe
+   # also uses this API with its own structure type, so bind ours before use.
+   user.GetMonitorInfoW.argtypes=[wintypes.HANDLE,ctypes.POINTER(MonitorInfo)]
    if not user.GetMonitorInfoW(wintypes.HANDLE(monitor),ctypes.byref(info)):raise OSError('Cannot read display bounds')
    work=(info.work.left,info.work.top,info.work.right,info.work.bottom)
    bounds=(info.monitor.left,info.monitor.top,info.monitor.right,info.monitor.bottom)
