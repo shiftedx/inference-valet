@@ -5,16 +5,16 @@ from ai_branding import apply_window_icon
 from ai_widgets import THEME, Button, ProfileSelect, TextField, Tooltip, scale, ui_font, monitor_work_area
 
 class ProfileEditor:
-    def __init__(self, parent, store, key, on_save, style_window, initial_page='Profile'):
+    def __init__(self, parent, store, key, on_save, style_window, initial_page='Profile', draft=None):
         self.store=store;self.key=key;self.on_save=on_save
-        values,self.snapshot=store.load(key)
+        values,self.snapshot=(draft['values'],draft['snapshot']) if draft is not None else store.load(key)
         self.window=tk.Toplevel(parent);self.window.title('Edit Strata profile')
         self.window.configure(bg=THEME['bg']);self.window.transient(parent)
         self.factor=scale(parent);apply_window_icon(self.window);style_window(self.window)
         self.window.protocol('WM_DELETE_WINDOW',self.close)
         self.window.bind('<Escape>',lambda event:self.close())
         self.vars={key:tk.StringVar(self.window,value=str(value)) for key,value in values.items()}
-        self.original={key:var.get() for key,var in self.vars.items()}
+        self.original=draft['original'] if draft is not None else {key:var.get() for key,var in self.vars.items()}
         self.fields={};self.field_pages={};self.error=tk.StringVar(self.window,value='')
         body=tk.Frame(self.window,bg=THEME['bg']);body.pack(fill='both',expand=True,padx=round(18*self.factor),pady=round(14*self.factor))
         tk.Label(body,text='Profile settings',bg=THEME['bg'],fg=THEME['text'],font=ui_font('heading',True),anchor='w').pack(fill='x')
@@ -73,6 +73,8 @@ class ProfileEditor:
         Button(footer,text='Cancel',command=self.close,quiet=True).pack(side='right',padx=(0,round(8*self.factor)))
         error_label.pack(side='bottom',fill='x',pady=(round(8*self.factor),round(4*self.factor)))
         viewport.pack_forget();viewport.pack(fill='both',expand=True)
+        from ai_display import refresh_fonts
+        self._display_fonts=refresh_fonts(self.window)
         self.select_page('Profile')
         self.window.update_idletasks()
         page_height=max(page.winfo_reqheight() for page in self.pages.values())
@@ -101,6 +103,25 @@ class ProfileEditor:
         self.select_page(initial_page if initial_page in self.pages else 'Profile')
         style_window(self.window);self.window.lift()
         self.fields['ple_io' if self.page=='Memory' else 'prefill' if self.page=='Engine' else 'name'].focus_set()
+
+    def rescale(self, style_window):
+        """Recreate pixel assets while retaining the exact unsaved validation snapshot."""
+        from ai_display import destroy_view
+        draft=dict(values={key:var.get() for key,var in self.vars.items()},
+                   snapshot=self.snapshot,original=self.original)
+        focus=self.window.focus_get()
+        field=next((key for key,value in self.fields.items() if value==focus),None)
+        cursor=self.fields[field].index('insert') if field else None
+        scroll=self.canvas.yview()[0];state=self.window.state()
+        replacement=type(self)(self.window.master,self.store,self.key,self.on_save,
+                               style_window,initial_page=self.page,draft=draft)
+        replacement.error.set(self.error.get())
+        replacement.window.update_idletasks();replacement.canvas.yview_moveto(scroll)
+        if field:
+            replacement.fields[field].focus_set();replacement.fields[field].icursor(cursor)
+        if state in ('withdrawn','iconic'):replacement.window.state(state)
+        destroy_view(self.window)
+        return replacement
 
     def _scroll(self,event):
         # Preserve wheel behavior in selectors; scroll only the settings viewport.

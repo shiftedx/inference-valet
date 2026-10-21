@@ -371,6 +371,129 @@ class LauncherUI:
   self.keys=list(PROFILES);self.selected=tk.StringVar(value=PROFILE_NAMES[self.keys[0]] if self.keys else 'No profiles found')
   self.auto_var=tk.BooleanVar(value=self.auto_enabled)
   self.delay_var=tk.StringVar(value=f"{IDLE_SETTINGS.read()['idle_minutes']} min")
+  self.collector=Collector(fetch,servers,read_demand_status);self.latest_performance={}
+  self.details_geometry=None;self.next_display_check=0;self.rescaling=False
+  self._logical_window_size=(760,580);self._display_work=None
+  self._build_dashboard()
+  self.window.protocol('WM_DELETE_WINDOW',self.close)
+  self.window.bind('<Unmap>',lambda event:self.hide() if event.widget==self.window and self.window.state()=='iconic' else None)
+  self.window.bind('<Escape>',lambda event:self.hide())
+  self.update_controls()
+  if enable_tray and not stop:
+   import pystray
+   image=icon_image(64,tray=True)
+   events=self.events
+   class VisualTrayIcon(pystray.Icon):
+    def _on_notify(icon,wparam,lparam):
+     if lparam in (0x202,0x205):
+      import ctypes
+      from ctypes import wintypes
+      point=wintypes.POINT();ctypes.windll.user32.GetPhysicalCursorPos(ctypes.byref(point))
+      events.put(('popup' if lparam==0x202 else 'context',(point.x,point.y)))
+     else:super()._on_notify(wparam,lparam)
+   self.tray=VisualTrayIcon('Inference Valet',image,'Inference Valet',tray_menu(lambda action,key=None:self.events.put((action,key)),lambda:bool(self.active),lambda:self.current,lambda:self.auto_enabled))
+   threading.Thread(target=self.tray.run,daemon=True).start()
+  self.poll_timer=self.window.after(100,self.poll)
+  self.refresh_timer=None
+  if observe:self.refresh_timer=self.window.after(200,self.refresh)
+  self.auto_timer=None
+  if observe and not stop:self.auto_timer=self.window.after(1000,self.check_auto)
+  if stop:self.window.after(50,lambda:self.begin('stop'))
+  self.window.update_idletasks()
+  self.window.geometry(f"{self.window.winfo_width()}x{min(screen_h-100,max(round(580*self.ui_scale),self.dashboard_frame.winfo_reqheight()))}")
+  self.window.update_idletasks()
+  native_window_style(self.window)
+  self._logical_window_size=(self.window.winfo_width()/self.ui_scale,self.window.winfo_height()/self.ui_scale)
+  if hidden:self.hide()
+ def check_display_scale(self,force=False,anchor=None):
+  """Refresh only the view; keep the controller, request state and workers alive."""
+  if self.closing or self.rescaling:return
+  now=time.monotonic()
+  if not force and now<self.next_display_check:return
+  self.next_display_check=now+1
+  from ai_display import read_display
+  target=self.popup if self.popup and self.popup.state()!='withdrawn' else self.window
+  display=read_display(target,anchor)
+  if display is None:return
+  # Never retire controls beneath a native dropdown or modal confirmation.
+  if self.window.tk.call('grab','current'):return
+  changed=abs(display.scale-self.ui_scale)>.02
+  if changed:
+   self._rescale_view(display)
+  elif display.work!=self._display_work:
+   self._fit_display(display)
+   if self.profile_editor and self.profile_editor.window.winfo_exists():
+    self.window.update_idletasks();self.profile_editor=self.profile_editor.rescale(native_window_style)
+  elif self.window.state()=='normal':
+   self._logical_window_size=(self.window.winfo_width()/self.ui_scale,self.window.winfo_height()/self.ui_scale)
+  self._display_work=display.work
+
+ def _fit_display(self,display,size=None):
+  from ai_display import fit_geometry,read_display
+  window=self.window;factor=display.scale;work=display.work
+  root_display=read_display(window);chrome=root_display.chrome if root_display else display.chrome
+  available=(max(1,work[2]-work[0]-round(32*factor)-chrome[0]),
+             max(1,work[3]-work[1]-round(32*factor)-chrome[1]))
+  window.minsize(min(round(600*factor),available[0]),min(round(450*factor),available[1]))
+  if window.state()!='zoomed':
+   window.geometry(fit_geometry(size or (window.winfo_width(),window.winfo_height()),
+                               (window.winfo_x(),window.winfo_y()),work,factor,chrome))
+
+ def _rescale_view(self,display):
+  from ai_display import destroy_view,rescale_geometry,refresh_fonts
+  from tkinter import font as tkfont
+  self.rescaling=True
+  try:
+   old_scale=self.ui_scale;ratio=display.scale/old_scale
+   panel=self.performance;expanded=panel.details_expanded if panel else False
+   page=panel.details_notebook.tab(panel.details_notebook.select(),'text') if panel else None
+   history={name:getattr(panel,name) for name in ('samples','history','identity','request_history','last_request')} if panel else {}
+   details=self.details_geometry
+   scroll=self.dashboard_canvas.yview()[0]
+   focus=self.window.focus_get()
+   focus_name=next((name for name in ('picker','edit_button','start_button','stop_button','auto_control','delay_picker') if getattr(self,name,None)==focus),None)
+   popup_visible=self.popup is not None and self.popup.state()!='withdrawn'
+   popup_anchor=getattr(self,'popup_monitor_anchor',None)
+   menu_visible=self.tray_context is not None and self.tray_context.window.state()!='withdrawn'
+   menu_anchor=self.tray_context.anchor if menu_visible else None
+   self.hide_popup()
+   if self.popup:destroy_view(self.popup)
+   if self.tray_context:destroy_view(self.tray_context.window)
+   self.popup=None;self.popup_performance=None;self.popup_start=None;self.popup_stop=None;self.popup_picker=None;self.tray_context=None
+   if panel:panel._hide_engine_tip()
+   old_canvas=self.dashboard_canvas;old_scrollbar=self.dashboard_scrollbar
+   old_canvas.pack_forget();old_scrollbar.pack_forget()
+   self.window.tk.call('tk','scaling',display.dpi/72)
+   # Tk 8.6 leaves existing named-font metrics cached after changing scaling.
+   for name in tkfont.names(root=self.window):
+    font=tkfont.nametofont(name,root=self.window);font.configure(size=font.cget('size'))
+   self.ui_scale=display.scale
+   self._build_dashboard()
+   destroy_view(old_canvas);destroy_view(old_scrollbar)
+   if self.performance:
+    for name,value in history.items():setattr(self.performance,name,value)
+    if self.latest_performance:self.performance.update(self.latest_performance)
+    if expanded:
+     self.performance.on_details=lambda value:None
+     self.performance.toggle_details();self.performance.on_details=self.resize_details
+    if page in self.performance.detail_tabs:self.performance.details_notebook.select(self.performance.detail_tabs[page])
+   self.details_geometry=(rescale_geometry(details[0],ratio,display),details[1]) if details else None
+   self.update_controls()
+   self._fit_display(display,tuple(value*display.scale for value in self._logical_window_size))
+   self.window.update_idletasks();self.dashboard_canvas.yview_moveto(scroll)
+   if self.profile_editor and self.profile_editor.window.winfo_exists():
+    self.profile_editor=self.profile_editor.rescale(native_window_style)
+   elif focus_name:getattr(self,focus_name).focus_set()
+   if popup_visible:self.show_popup(popup_anchor)
+   elif menu_visible:self.show_context(menu_anchor)
+   self._display_fonts=refresh_fonts(self.window)
+   self.window.update_idletasks()
+   self._fit_display(display,tuple(value*display.scale for value in self._logical_window_size))
+  finally:self.rescaling=False
+
+ def _build_dashboard(self):
+  import tkinter as tk
+  from tkinter import ttk
   style=ttk.Style(self.window);style.theme_use('clam')
   style.configure('Vertical.TScrollbar',background=THEME['line'],troughcolor=THEME['bg'],bordercolor=THEME['bg'],lightcolor=THEME['bg'],darkcolor=THEME['bg'],arrowcolor=THEME['muted'])
   style.map('Vertical.TScrollbar',background=[('pressed',THEME['accent']),('active',THEME['raised'])])
@@ -394,10 +517,11 @@ class LauncherUI:
     if frame.winfo_reqheight()>canvas.winfo_height():scrollbar.pack(side='right',fill='y',before=canvas)
     else:scrollbar.pack_forget()
    finally:fitting=False
+  self.fit_dashboard=fit_dashboard
   frame.bind('<Configure>',fit_dashboard)
   canvas.bind('<Configure>',lambda event:(canvas.itemconfigure(window_item,width=event.width),fit_dashboard()))
   canvas.bind('<MouseWheel>',lambda event:canvas.yview_scroll(-int(event.delta/120),'units'))
-  self.dashboard_canvas=canvas
+  self.dashboard_canvas=canvas;self.dashboard_scrollbar=scrollbar;self.dashboard_frame=frame
   hero=tk.Frame(frame,bg=THEME['bg']);hero.pack(fill='x')
   controls=tk.Frame(hero,bg=hero.cget('bg'));controls.pack(fill='x',pady=(round(4*self.ui_scale),0))
   picker_group=tk.Frame(controls,bg=hero.cget('bg'));picker_group.pack(side='left',fill='x',expand=True,padx=(0,round(8*self.ui_scale)))
@@ -425,8 +549,7 @@ class LauncherUI:
   performance_header=tk.Frame(frame,bg=THEME['bg']);performance_header.pack(fill='x',pady=(12,7))
   self._text(performance_header,'Performance','heading',True).pack(side='left')
   self._text(performance_header,'Activity · past minute','caption',color=THEME['muted']).pack(side='right')
-  self.performance=PerformancePanel(frame,status_parent=self.status_strip) if not stop else None
-  self.collector=Collector(fetch,servers,read_demand_status);self.latest_performance={}
+  self.performance=PerformancePanel(frame,status_parent=self.status_strip) if not self.stop_only else None
   if self.performance:
    from ai_api_access import ApiAccessPanel
    api_tab=tk.Frame(self.performance.details_notebook,bg=THEME['bg'],padx=round(8*self.ui_scale),pady=round(8*self.ui_scale))
@@ -438,36 +561,6 @@ class LauncherUI:
    self.performance.pack(fill='both',expand=True)
   self._bind_scroll_region(frame,canvas)
   if self.performance:self.performance.on_details=self.resize_details
-  self.details_geometry=None
-  self.window.protocol('WM_DELETE_WINDOW',self.close)
-  self.window.bind('<Unmap>',lambda event:self.hide() if event.widget==self.window and self.window.state()=='iconic' else None)
-  self.window.bind('<Escape>',lambda event:self.hide())
-  self.update_controls()
-  if enable_tray and not stop:
-   import pystray
-   image=icon_image(64,tray=True)
-   events=self.events
-   class VisualTrayIcon(pystray.Icon):
-    def _on_notify(icon,wparam,lparam):
-     if lparam in (0x202,0x205):
-      import ctypes
-      from ctypes import wintypes
-      point=wintypes.POINT();ctypes.windll.user32.GetPhysicalCursorPos(ctypes.byref(point))
-      events.put(('popup' if lparam==0x202 else 'context',(point.x,point.y)))
-     else:super()._on_notify(wparam,lparam)
-   self.tray=VisualTrayIcon('Inference Valet',image,'Inference Valet',tray_menu(lambda action,key=None:self.events.put((action,key)),lambda:bool(self.active),lambda:self.current,lambda:self.auto_enabled))
-   threading.Thread(target=self.tray.run,daemon=True).start()
-  self.poll_timer=self.window.after(100,self.poll)
-  self.refresh_timer=None
-  if observe:self.refresh_timer=self.window.after(200,self.refresh)
-  self.auto_timer=None
-  if observe and not stop:self.auto_timer=self.window.after(1000,self.check_auto)
-  if stop:self.window.after(50,lambda:self.begin('stop'))
-  self.window.update_idletasks()
-  self.window.geometry(f"{self.window.winfo_width()}x{min(screen_h-100,max(round(580*self.ui_scale),frame.winfo_reqheight()))}")
-  self.window.update_idletasks()
-  native_window_style(self.window)
-  if hidden:self.hide()
  def selected_profile(self):
   index=self.picker.current()
   return self.keys[index] if 0<=index<len(self.keys) else None
@@ -556,6 +649,7 @@ class LauncherUI:
  def hide(self):self.window.withdraw()
  def close(self):self.hide()
  def show(self):
+  if self.observe:self.check_display_scale(force=True)
   self.hide_popup()
   self.window.deiconify();self.window.lift();self.window.focus_force()
   if self.observe:self.refresh()
@@ -563,6 +657,7 @@ class LauncherUI:
   if self.popup:self.popup.withdraw()
   if self.tray_context:self.tray_context.hide()
  def show_context(self,anchor):
+  if self.observe:self.check_display_scale(force=True,anchor=anchor)
   from ai_tray_menu import TrayContextMenu
   self.hide_popup()
   if self.tray_context is None:
@@ -571,6 +666,7 @@ class LauncherUI:
        lambda:self.current,lambda:self.auto_enabled))
   self.tray_context.show(anchor)
  def show_popup(self,anchor=None):
+  if self.observe:self.check_display_scale(force=True,anchor=anchor)
   if self.tray_context:self.tray_context.hide()
   import tkinter as tk
   from tkinter import ttk
@@ -623,6 +719,8 @@ class LauncherUI:
      if self.popup and self.popup.state()!='withdrawn' and not str(self.window.tk.call('focus')).startswith(str(self.popup)):self.hide_popup()
     self.popup.after(180,check)
    self.popup.bind('<FocusOut>',dismiss)
+  from ai_display import refresh_fonts
+  self._popup_fonts=refresh_fonts(self.popup)
   if self.latest_performance:self.popup_performance.update(self.latest_performance)
   else:self.popup_performance.update_activity({'state':'unknown','title':self.hero_state.get()})
   import ctypes
@@ -829,6 +927,7 @@ class LauncherUI:
   from tkinter import messagebox
   if self.poll_timer:
    self.window.after_cancel(self.poll_timer);self.poll_timer=None
+  if self.observe:self.check_display_scale()
   while not self.events.empty():
    kind,payload=self.events.get()
    if kind in ['start','stop']:self.begin(kind,payload)

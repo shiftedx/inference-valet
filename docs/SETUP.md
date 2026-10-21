@@ -1,5 +1,11 @@
 # Setup / operation
 
+## Remote and local displays
+
+Valet checks the dashboard or open tray window's effective Windows DPI while it runs and when opening those controls. Switching display scale rebuilds the interface in the same process; fonts, rounded controls and charts use the new scale. Display work-area changes keep the dashboard on screen. Native menus and modal confirmations finish before controls are rebuilt.
+
+The selected profile, active model action, monitoring workers, chart history, details tab and unsaved editor values are preserved. Display changes do not load/unload Strata or save profile settings. No restart or Windows scaling override is needed.
+
 ## Connect Strata
 
 | Item | Required location / action |

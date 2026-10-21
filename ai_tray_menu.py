@@ -102,6 +102,8 @@ class TrayContextMenu:
             button.pack(fill='x', pady=round(2*self.factor))
             if item.tooltip:Tooltip(button, item.tooltip)
             self.rows.append(item);self.buttons.append(button)
+        from ai_display import refresh_fonts
+        self._display_fonts=refresh_fonts(self.window)
         self.canvas.yview_moveto(0);self.refresh(fit=False);self.fit()
 
     def refresh(self, fit=True):
