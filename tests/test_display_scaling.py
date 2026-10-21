@@ -179,6 +179,26 @@ class DisplayScalingTests(unittest.TestCase):
         left, top, right, bottom = display.work
         self.assertGreater(right, left); self.assertGreater(bottom, top)
 
+    def test_native_display_probe_and_tray_popup_share_windows_api_safely(self):
+        app = self.app
+        app.hide()
+        display = read_display(app.window)
+        left, top, right, bottom = display.work
+        anchor = ((left+right)//2, (top+bottom)//2)
+        for _ in range(3):
+            # The live polling loop probes the display before processing clicks.
+            self.assertIsNotNone(read_display(app.window))
+            app.show_popup(anchor)
+            app.window.update()
+            self.assertEqual(app.popup.state(), 'normal')
+            self.assertIsNotNone(read_display(app.popup))
+            app.position_popup()
+            app.hide_popup()
+        app.events.put(('show', None))
+        app.poll()
+        self.assertEqual(app.window.state(), 'normal')
+        self.assertIsNotNone(app.poll_timer)
+
     def test_chart_and_later_created_editor_use_the_new_font_scale(self):
         app = self.app
         def chart_height():
