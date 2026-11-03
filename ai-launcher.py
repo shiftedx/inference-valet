@@ -50,11 +50,15 @@ LOGS=STATE_DIR
 IDLE_SETTINGS=Settings(LOGS/'idle-settings.json')
 HIDDEN=subprocess.CREATE_NO_WINDOW
 from ai_profiles import ProfileStore
+import ai_ninfer
 PROFILE_STORE=ProfileStore(STRATA,LOGS)
 PROFILES={};PROFILE_NAMES={}
 def reload_profiles():
  global PROFILES,PROFILE_NAMES
  profiles=PROFILE_STORE.descriptors(PY,CONFIG)
+ external=ai_ninfer.descriptors(pathlib.Path(sys.executable).with_name('python.exe'))
+ if profiles.keys() & external.keys():raise ValueError('NInfer and Strata profile IDs must be distinct.')
+ profiles.update(external)
  PROFILES=profiles;PROFILE_NAMES={key:cfg['name'] for key,cfg in profiles.items()}
 reload_profiles()
 
@@ -68,6 +72,7 @@ def classify(exe,args):
   if same(exe,STRATA/'Strata/engine'/name):return kind
  interpreters=[PY,PY.with_name('pythonw.exe'),pathlib.Path(psutil.Process().exe()).with_name('python.exe'),pathlib.Path(psutil.Process().exe()).with_name('pythonw.exe')]
  if len(args)>1 and any(same(exe,p) for p in interpreters):
+  if same(args[1],ROOT/'ai_ninfer.py'):return 'ninfer-launcher'
   for script,kind in [('launch_strata_profile.py','strata-launcher'),('managed_strata_server.py','strata-server'),('Strata/serve/server.py','strata-server')]:
    if same(args[1],STRATA/script):return kind
  return None
@@ -80,12 +85,16 @@ def servers():
    exe=p.exe()
    if exe and (kind:=classify(exe,p.cmdline() or [])):found.append((p,kind))
   except (psutil.NoSuchProcess,psutil.AccessDenied,OSError):pass
+ if owned:=ai_ninfer.owned_process():found.append((owned[0],'ninfer-server'))
  return found
 
 def validate_profile(key):
  if key not in PROFILES:raise ValueError('No matching profile. Add a profile JSON under the configured backend profiles directory, then reopen Valet.')
  cfg=PROFILES[key]
  if not pathlib.Path(cfg['command'][0]).is_file():raise ValueError('Strata Python is missing. Check strata_python in config.json.')
+ if cfg['engine']!='strata':
+  ai_ninfer.verify_assets(cfg)
+  return cfg
  from ai_profiles import read_object,validate_arguments,argument,fingerprint
  path=PROFILE_STORE.paths(key)[0]
  if cfg.get('profile_hash') and fingerprint(path)!=cfg['profile_hash']:
@@ -119,7 +128,10 @@ def control_lock(timeout=150):
 def terminate_verified(p,kind):
  try:
   # Re-check the actual process immediately before stopping it; psutil also detects reused PIDs.
-  if classify(p.exe(),p.cmdline())!=kind:raise RuntimeError('Process identity changed; nothing stopped.')
+  if kind=='ninfer-server':
+   owned=ai_ninfer.owned_process()
+   if not owned or owned[0]!=p:raise RuntimeError('NInfer process identity changed; nothing stopped.')
+  elif classify(p.exe(),p.cmdline())!=kind:raise RuntimeError('Process identity changed; nothing stopped.')
   p.terminate()
  except psutil.NoSuchProcess:pass
 
@@ -134,7 +146,7 @@ def stop_all(report=lambda _:None):
  # Installed direct-launch servers can lack a launcher PID record.
  # Stop only the verified executables/scripts, never another application using the port.
  remaining=servers()
- for kind in ['strata-server','strata-engine','strata-vision','strata-launcher']:
+ for kind in ['strata-server','strata-engine','strata-vision','strata-launcher','ninfer-server']:
   for p,k in remaining:
    if k==kind:terminate_verified(p,k)
  gone,alive=psutil.wait_procs([p for p,k in remaining],timeout=30)
@@ -185,9 +197,11 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
     env['STRATA_VALET_BIND']=CONFIG['on_demand']['listen_host']
   with log.open('w') as output:
    started=time.monotonic_ns()
+   if cfg['engine']!='strata':env['VALET_NINFER_STARTED']=str(started)
    proc=subprocess.Popen(cfg['command'],cwd=cfg['cwd'],env=env,stdout=output,stderr=subprocess.STDOUT,creationflags=HIDDEN)
-  if not automatic_guard:IDLE_SETTINGS.update(last_profile=key)
-  if CONFIG.get('on_demand',{}).get('enabled'):IDLE_SETTINGS.update(demand_armed=True)
+  if cfg['engine']=='strata':
+   if not automatic_guard:IDLE_SETTINGS.update(last_profile=key)
+   if CONFIG.get('on_demand',{}).get('enabled'):IDLE_SETTINGS.update(demand_armed=True)
  report('Loading '+cfg['label']+' ...')
  deadline=time.monotonic()+600;next_game_check=0;load_requested=False
  while time.monotonic()<deadline:
@@ -221,7 +235,12 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
       load_requested=True
       continue # Re-read native readiness and re-check cancellation before reporting success.
      if not status.get('loaded') or status['context']['native']!=cfg['context'] or status['concurrency']['serving']!=cfg['slots']:raise ValueError('Still loading')
-    fetch('/health');report('Ready: '+cfg['label']+' — http://127.0.0.1:8080');return dict(profile=key,model=cfg['model'],log=str(log))
+    fetch('/health')
+    if cfg['engine']!='strata':
+     owned=ai_ninfer.owned_process()
+     if not owned or owned[1]['profile']!=key or strata_listener([(owned[0],'ninfer-server')]) is None:raise ValueError('Still loading')
+     IDLE_SETTINGS.update(last_profile=key,demand_armed=False)
+    report('Ready: '+cfg['label']+' — http://127.0.0.1:8080');return dict(profile=key,model=cfg['model'],log=str(log))
   except (OSError,ValueError,KeyError):pass
   if proc.poll() is not None:
    if not servers():raise RuntimeError('Startup stopped. '+log.read_text(errors='replace')[-1800:])
@@ -307,6 +326,10 @@ def observed_profile():
   listener=strata_listener(owned)
   if listener is None:return None,'API unavailable: listener ownership could not be verified' if owned else 'No model loaded.'
   model=fetch('/v1/models')['data'][0]['id']
+  if (native:=ai_ninfer.owned_process()) and native[0]==listener:
+   key=native[1]['profile'];cfg=PROFILES.get(key)
+   if cfg and cfg['model']==model:return key,'Running: '+cfg['label']
+   return None,'Running: '+model
   s=fetch('/v1/status');demand=read_demand_status()
   if not listener.is_running() or strata_listener([(listener,'strata-server')]) is None:return None,'API unavailable: listener changed during status check'
   if demand.get('owner_pid')!=listener.pid:demand={}
@@ -331,6 +354,12 @@ def observed_profile():
 def diagnose():
  owned=[dict(pid=p.pid,kind=k,created=p.create_time()) for p,k in servers()]
  result=dict(processes=owned,listener=listener_present(socket),demand=read_demand_status())
+ settings=IDLE_SETTINGS.read()
+ key=settings['last_profile'];profile=PROFILES.get(key)
+ result['auto_load']=dict(enabled=settings['enabled'],profile=key,
+    engine=profile['engine'] if profile else None,model=profile['model'] if profile else None,
+    mode='on demand' if profile and profile['engine']=='strata' and CONFIG.get('on_demand',{}).get('enabled') else 'restore when idle',
+    armed=settings['demand_armed'])
  directory=PROFILE_STORE.root/'profiles'
  result['profile_catalog']=dict(backend_root=str(PROFILE_STORE.root),directory=str(directory),
   directory_exists=directory.is_dir(),count=len(PROFILES),enabled_profiles=CONFIG.get('enabled_profiles'),
@@ -573,6 +602,9 @@ class LauncherUI:
   if self.active or not self.keys:return
   key=self.selected_profile()
   if key is None:return
+  if PROFILES[key]['engine']!='strata':
+   messagebox.showinfo('NInfer profile', 'Edit this backend’s profile in Valet config.json, then reopen Valet.',parent=self.window)
+   return
   try:self.profile_editor=ProfileEditor(self.window,PROFILE_STORE,key,self.save_profile,native_window_style,initial_page=initial_page)
   except (OSError,ValueError,KeyError) as exc:messagebox.showerror('Profile unavailable',str(exc),parent=self.window)
  def save_profile(self,key,values,snapshot):
@@ -831,6 +863,10 @@ class LauncherUI:
   elif 'failed' in reason.lower():explanation='Restore check failed. Retrying automatically.'
   elif 'API recovery' in reason:explanation=reason
   else:explanation=''
+  remembered=PROFILES.get(IDLE_SETTINGS.read()['last_profile'])
+  if remembered and self.auto_enabled and (explanation or remembered['engine']!='strata'):
+   target='Restore target: '+remembered['label']
+   explanation=target+(' · '+explanation if explanation else '')
   self.auto_explanation.set(explanation)
   if explanation:self.auto_note.pack(fill='x',pady=(4,0))
   else:self.auto_note.pack_forget()

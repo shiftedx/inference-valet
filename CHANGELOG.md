@@ -1,5 +1,11 @@
 # Changes
 
+## 0.3.2
+
+- Discover and manage native Windows Infernix and NInferEZ model profiles alongside Strata.
+- Show live inference telemetry and the expected idle restore backend and model.
+- Preserve verified listener ownership, memory monitoring, and game admission across backend switches.
+
 ## Unreleased
 
 - API access details: masked token field, eye reveal/hide and Copy; automatically mask when leaving the tab.

@@ -14,6 +14,16 @@
 - Automatic on-demand restore/recovery: restore the unloaded listener; load on the next admitted request.
 - Authenticated Strata: set `strata_api_key` in Valet's local `config.json` (or `STRATA_API_KEY` in the environment). Valet authenticates telemetry and passes the key to the backend through its environment. View or copy the masked token in the dashboard details → API access tab. Restart Valet after changing it; managed scripts must forward `STRATA_API_KEY` to Strata.
 
+## NInfer and Infernix
+
+- Register an installed Windows runtime under `ninfer_profiles` in local `config.json`. Each named entry supplies `engine`, `label`, `exe`, `artifact`, `model`, `context`, `slots` and optional engine `args`.
+- Reopen Valet to discover the entry. Select it from the same model picker as Strata. Its runtime and artifact paths must be absolute.
+- Valet owns one listener on port 8080. NInfer-family profiles bind to loopback, load when selected, and use **Restore when idle**. Strata profiles can restore an unloaded listener and load on request.
+- Set `auth: true` on an Infernix profile to reuse Valet's configured API token. NInferEZ profiles use the loopback listener without token forwarding.
+- Infernix dashboard telemetry uses `/metrics?format=json`. NInferEZ uses `/stats` for live rates and request counts. Completed-request timings require Infernix's JSON history.
+- Check the restore target in Valet or run `python ai-launcher.py --diagnose` and read `auto_load`. `--list` shows the backend, model and context for each profile.
+- Model starts check the configured GPU and game admission rules. The native process monitor unloads on sustained low memory or game activity.
+
 ## Profile discovery
 
 - Add a compatible profile to the external `profiles/` directory; restart Valet to discover it.

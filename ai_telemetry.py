@@ -35,6 +35,62 @@ def normalize_strata(metrics):
          'last_at':last.get('time'),'expert_hits':ratio(last.get('hit_rate'),1,100),'pcie_share':ratio(last.get('pcie_share'),1,100),
          'draft_acceptance':ratio(last.get('drafts_accepted'),last.get('drafts_offered'),100),'hardware':metrics.get('hardware') or {}}
 
+def adapt_infernix(metrics):
+ """Translate Infernix's JSON telemetry to the panel's shared counters."""
+ if metrics.get('schema')!='infernix.telemetry/1':
+  raise ValueError('Unsupported Infernix telemetry schema')
+ live=dict(metrics.get('live') or {})
+ engine=metrics.get('engine') or {}
+ active=live.get('active') or []
+ phases={'prefill':'reading','decode':'generating'}
+ slots=[]
+ for row in active:
+  phase=row.get('phase')
+  read=row.get('processed_tokens') or 0
+  used=(row.get('prompt_tokens') or 0) if phase=='decode' else read
+  slots.append(dict(slot=len(slots),state=phases.get(phase,phase or 'unknown'),
+                    prompt_tokens=used,generated=row.get('output_tokens')))
+ live.update(slots=slots,queued=live.get('waiting'),
+             generated=sum(row.get('output_tokens') or 0 for row in active) if active else None)
+ reading=[row for row in active if row.get('phase')=='prefill']
+ if reading:
+  live.update(prompt_read=sum(row.get('processed_tokens') or 0 for row in reading),
+              prompt_total=sum(row.get('prompt_tokens') or 0 for row in reading))
+ requests=[]
+ for row in metrics.get('requests') or []:
+  converted=dict(row)
+  # Infernix's hit_rate measures prefix reuse, rather than expert residency.
+  converted['hit_rate']=ratio(row.get('expert_hits'),row.get('expert_lookups'))
+  requests.append(converted)
+ return {**metrics,'live':live,'requests':requests}, {
+     'loaded':True,'context':{'native':engine.get('max_context')},
+     'concurrency':{'serving':engine.get('max_concurrency')},
+ }
+
+def adapt_ninfer_stats(stats, previous=None):
+ """Use interval counter deltas from NInferEZ, which exposes no request history."""
+ if stats.get('object')!='ninfer.stats':
+  raise ValueError('Unsupported NInfer stats schema')
+ requests=stats.get('requests') or {}
+ capacity=stats.get('capacity') or {}
+ previous=previous or {}
+ current_time=number(stats.get('uptime_seconds'))
+ previous_time=number(previous.get('uptime_seconds'))
+ elapsed=current_time-previous_time if current_time is not None and previous_time is not None else None
+
+ def speed(counter):
+  current=number((stats.get('counters') or {}).get(counter))
+  old=number((previous.get('counters') or {}).get(counter))
+  return ratio(current-old,elapsed) if current is not None and old is not None and current>=old else None
+
+ state='generating' if requests.get('decode_ready') else 'reading' if requests.get('prefilling') else 'idle'
+ live=dict(state=state,running=requests.get('running'),queued=requests.get('waiting'),
+           decode_ready=requests.get('decode_ready'),tok_s=speed('committed_decode_tokens'),
+           prefill_tok_s_mean=speed('computed_prefill_tokens'))
+ return dict(live=live,engine=capacity),dict(
+     loaded=True,context={'native':capacity.get('max_context')},
+     concurrency={'serving':capacity.get('max_concurrency')})
+
 class Perf(ctypes.Structure):
  _fields_=[('cb',ctypes.c_ulong)]+[(k,ctypes.c_size_t) for k in ('CommitTotal','CommitLimit','CommitPeak','PhysicalTotal','PhysicalAvailable','SystemCache','KernelTotal','KernelPaged','KernelNonpaged','PageSize')]+[(k,ctypes.c_ulong) for k in ('HandleCount','ProcessCount','ThreadCount')]
 def host_hardware():
@@ -47,7 +103,7 @@ def host_hardware():
 def strata_listener(processes):
  """Return the verified server that actually owns the local API listener."""
  for process,kind in processes:
-  if kind!='strata-server':continue
+  if kind not in ('strata-server','ninfer-server'):continue
   try:
    if any(c.status==psutil.CONN_LISTEN and c.laddr.port==8080 and c.laddr.ip in ('127.0.0.1','0.0.0.0') for c in process.net_connections(kind='tcp')):return process
   except (OSError,psutil.Error):continue
@@ -60,27 +116,39 @@ class Collector:
   self.gpu_probe=gpu_probe if gpu_probe is not None else GpuTelemetry();self.active_power=ActivePowerAverage()
   self.gpu_reading={};self.gpu_checked=float('-inf')
   self.runtime_details=RuntimeDetailsReader(STRATA_ROOT)
+  self.ninfer_sample=None
  def collect(self):return self._collect(True)
  def summary(self):return self._collect(False)
  def _collect(self,detailed):
   from ai_activity import build_activity,read_comfy,read_gpu_processes
   from ai_demand import DEFAULTS
   sampled=time.monotonic();hardware=host_hardware() if detailed else {};out={'state':'no model loaded','slots':[],'live_speed':None,'hardware':hardware};identity=None
-  processes=[];status=None;metrics=None;health=None;verified=False;demand={};listener=None;shared_settings=None
+  processes=[];status=None;metrics=None;health=None;verified=False;demand={};listener=None;shared_settings=None;native=False
   try:
    processes=list(self.servers());identity=tuple(sorted((p.pid,p.create_time()) for p,k in processes))
    # A known script somewhere on the PC does not establish ownership of port 8080.
    listener=strata_listener(processes);verified=listener is not None
+   native=verified and any(p==listener and kind=='ninfer-server' for p,kind in processes)
    if verified:
     demand=self.demand()
     if demand.get('owner_pid')!=listener.pid or demand.get('owner_created')!=listener.create_time():demand={}
     try:health=self.fetch('/health')
     except (OSError,ValueError):pass
-    try:metrics=self.fetch('/metrics')
-    except (OSError,ValueError):pass
-    try:status=self.fetch('/v1/status')
-    except (OSError,ValueError):pass
-    if detailed:
+    if native:
+     try:
+      if listener.name().lower()=='ninfer-serve.exe':
+       stats=self.fetch('/stats')
+       previous=self.ninfer_sample
+       metrics,status=adapt_ninfer_stats(stats,previous[1] if previous and previous[0]==identity else None)
+       self.ninfer_sample=(identity,stats)
+      else:metrics,status=adapt_infernix(self.fetch('/metrics?format=json'))
+     except (OSError,ValueError):pass
+    else:
+     try:metrics=self.fetch('/metrics')
+     except (OSError,ValueError):pass
+     try:status=self.fetch('/v1/status')
+     except (OSError,ValueError):pass
+    if detailed and not native:
      try:shared_settings=self.fetch('/settings')
      except (OSError,ValueError,KeyError):pass
     if not listener.is_running() or strata_listener([(listener,'strata-server')]) is None:
@@ -89,7 +157,10 @@ class Collector:
     try:
      with socket.create_connection(('127.0.0.1',8080),timeout=.2):health={'status':'unverified'}
     except OSError:pass
-   if isinstance(metrics,dict):out=normalize_strata(metrics)
+   if isinstance(metrics,dict):
+    out=normalize_strata(metrics)
+    if native and metrics.get('live',{}).get('decode_ready'):
+     out['live_speed']=metrics['live'].get('tok_s')
    if isinstance(status,dict):
     out['context']=status.get('context',{}).get('native',out.get('context'))
     last=status.get('last_timings') or {}
@@ -119,6 +190,8 @@ class Collector:
   activity=build_activity(status,metrics,demand,out['hardware'],gpu_reading,
                          {p.pid for p,k in processes},verified=verified,health=health,
                          options={**DEFAULTS,**CONFIG.get('on_demand',{})})
+  if native and verified:
+   activity['detail']=activity['detail'].replace('Strata','NInfer-family backend')
   activity['comfy']=read_comfy(CONFIG.get('activity',{}).get('comfyui_url'))
   comfy=activity['comfy']
   # Queue activity alone does not prove GPU use or grant admission priority.
