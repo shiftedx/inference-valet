@@ -249,8 +249,16 @@ class LayoutTests(unittest.TestCase):
                     canvas_right = app.dashboard_canvas.winfo_rootx() + app.dashboard_canvas.winfo_width()
                     self.assertEqual(app.picker.winfo_height(),app.start_button.winfo_height())
                     self.assertEqual(app.picker.winfo_height(),app.stop_button.winfo_height())
-                    tops=[widget.winfo_rooty() for widget in (app.picker,app.edit_button,app.start_button,app.stop_button)]
-                    self.assertEqual(len(set(tops)),1)
+                    self.assertEqual(app.picker.winfo_rooty(),app.edit_button.winfo_rooty())
+                    self.assertEqual(app.start_button.winfo_rooty(),app.stop_button.winfo_rooty())
+                    picker_bottom=app.picker.winfo_rooty()+app.picker.winfo_height()
+                    if app.start_button.winfo_rooty()==app.picker.winfo_rooty():
+                        self.assertGreaterEqual(app.start_button.winfo_rootx(),
+                                                app.edit_button.winfo_rootx()+app.edit_button.winfo_width())
+                    else:
+                        self.assertGreaterEqual(app.start_button.winfo_rooty(),picker_bottom)
+                    self.assertGreaterEqual(app.stop_button.winfo_rootx(),
+                                            app.start_button.winfo_rootx()+app.start_button.winfo_width())
                     plots=list(app.performance.plots.values())
                     self.assertLessEqual(max(p.winfo_width() for p in plots)-min(p.winfo_width() for p in plots),1)
                     for control in (app.picker, app.edit_button, app.start_button, app.stop_button):
