@@ -197,4 +197,3 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                 conn.close()
 
     return ThreadingHTTPServer((str(interface.ip) if interface else "127.0.0.1", port), Handler)
-
