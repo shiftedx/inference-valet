@@ -48,6 +48,8 @@
 - Activity contains counts, timings, phases, and outcomes; exclude prompts, responses, workflow graphs, credentials, and client identities not supplied by the backend.
 - Native recent-request history is bounded and process-local; polling can miss short phases and rejected requests.
 
+In-flight requests include input preparation and work between engine turns. Occupied slots / serving capacity report engine occupancy separately; outside-slot requests are not an inferred waiting queue. Unavailable occupancy remains unavailable.
+
 ## ComfyUI observation
 
 ```json

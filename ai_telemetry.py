@@ -31,6 +31,9 @@ def normalize_strata(metrics):
          'last_speed':last.get('decode_tok_s'),'last_prefill':prefill,'ttft_ms':last.get('ttft_ms'),
          'reuse':ratio(last.get('reused'),prompt,100),'generated':live.get('generated') if state in ('reading','generating') else None,
          'running':live.get('running',int(state in ('reading','generating'))),'queued':live.get('queued'),
+         'capacity':engine.get('batch_slots',engine.get('max_concurrency',live.get('parallel'))),
+         'occupied_slots':sum(row.get('state') in ('reading','generating','decoding','prefill','decode','busy','running') for row in live['slots']) if isinstance(live.get('slots'),list) else None,
+         'outside_slots':live.get('outside_slots'),
          'prompt_read':live.get('prompt_read'),'prompt_total':live.get('prompt_total'),
          'last_at':last.get('time'),'expert_hits':ratio(last.get('hit_rate'),1,100),'pcie_share':ratio(last.get('pcie_share'),1,100),
          'draft_acceptance':ratio(last.get('drafts_accepted'),last.get('drafts_offered'),100),'hardware':metrics.get('hardware') or {}}
@@ -190,8 +193,9 @@ class Collector:
   activity=build_activity(status,metrics,demand,out['hardware'],gpu_reading,
                          {p.pid for p,k in processes},verified=verified,health=health,
                          options={**DEFAULTS,**CONFIG.get('on_demand',{})})
+  activity['engine']=('ninfer' if listener.name().lower()=='ninfer-serve.exe' else 'infernix') if native else 'strata' if verified else None
   if native and verified:
-   activity['detail']=activity['detail'].replace('Strata','NInfer-family backend')
+   activity['detail']=activity['detail'].replace('Strata','NInferEZ' if activity['engine']=='ninfer' else 'Infernix')
   activity['comfy']=read_comfy(CONFIG.get('activity',{}).get('comfyui_url'))
   comfy=activity['comfy']
   # Queue activity alone does not prove GPU use or grant admission priority.
@@ -303,7 +307,7 @@ class GpuTuningPanel(tk.Frame):
   super().__init__(parent,bg=THEME['bg'])
   self.factor=float(self.tk.call('tk','scaling'))/(96/72);self.compact=compact
   self.groups={};self.values={};self.visible=[];self.layout_key=None;self.bind('<Configure>',lambda event:self._layout());self.average_help=tk.StringVar(value='')
-  for key,title in (('gpu_clock','Core clock'),('gpu_memory_clock','Memory clock'),('gpu_memory_busy','Memory activity'),('gpu_temp','Temperature'),('gpu_power','Power'),('average_watts','Strata avg')):
+  for key,title in (('gpu_clock','Core clock'),('gpu_memory_clock','Memory clock'),('gpu_memory_busy','Memory activity'),('gpu_temp','Temperature'),('gpu_power','Power'),('average_watts','Active avg')):
    group=tk.Frame(self,bg=THEME['bg']);self.groups[key]=group
    tk.Label(group,text=title,bg=THEME['bg'],fg=THEME['muted'],font=ui_font('caption'),anchor='w').pack(fill='x')
    value=tk.StringVar(value='—');self.values[key]=value
@@ -419,6 +423,8 @@ class PerformancePanel:
   self._label(request_row,variable=self.requests_note,size='caption',color=THEME['muted']).pack(side='right')
   self.agent_activity=tk.Canvas(requests,height=round(22*self.scale),bg=THEME['bg'],highlightthickness=0)
   self.agent_activity.pack(fill='x',pady=(4,2));self.agent_activity.bind('<Configure>',lambda event:self.draw_agents())
+  self.slot_help=tk.StringVar(value='In flight counts requests; slots count engine work. These are different scopes.')
+  Tooltip(self.agent_activity,self.slot_help)
   self.first_token_group=tk.Frame(requests,bg=THEME['bg'])
   token_row=tk.Frame(self.first_token_group,bg=THEME['bg']);token_row.pack(fill='x')
   self._label(token_row,'First token','caption',color=THEME['muted']).pack(side='left')
@@ -656,8 +662,9 @@ class PerformancePanel:
   self.activity_marks.grid(row=1 if stacked else 0,column=1 if stacked else 2,columnspan=2 if stacked else 1,sticky='w' if stacked else 'e',padx=0 if stacked else (gap,0),pady=(round(4*self.scale),0) if stacked else 0)
   self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
 
- def set_activity_status(self,title,detail,state):
-  self.activity_title.set('Strata · '+title);self.activity_note.set(detail)
+ def set_activity_status(self,title,detail,state,engine='strata'):
+  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ'}.get(engine)
+  self.activity_title.set((backend+' · ' if backend else '')+title);self.activity_note.set(detail)
   self.status_dot.configure(fg=THEME['success'] if state in ('ready','reading','generating') else THEME['warning'] if state in ('blocked','stale','error') else THEME['muted'])
   self.activity_title_label.configure(fg=THEME['error'] if state=='error' else THEME['warning'] if state in ('unavailable','stale','blocked') else THEME['text'])
   if self.status_external:self.activity_header.pack(fill='x',expand=True)
@@ -681,7 +688,7 @@ class PerformancePanel:
   notes=[detail] if detail and activity.get('state') not in ('ready','reading','generating') and detail.casefold()!=title.casefold() else []
   for blocker in blockers:
    if blocker and not any(blocker.casefold() in part.casefold() for part in notes):notes.append(blocker)
-  self.set_activity_status(title,'\n'.join(notes),activity.get('state'))
+  self.set_activity_status(title,'\n'.join(notes),activity.get('state'),activity.get('engine','strata'))
   count=number(activity.get('gpu_process_count'))
   self.gpu_observation.set(f'{int(count)} other GPU process'+('es' if count!=1 else '') if count is not None else 'GPU process count unavailable')
   self.gpu_mark.configure(text='▣ '+(str(int(count)) if count is not None else '—'))
@@ -728,7 +735,7 @@ class PerformancePanel:
   self.gpu_mark.configure(text='▣ —');self.comfy_mark.pack_forget()
   self.gpu_observation.set('GPU observation is stale');self.comfy_observation.set('ComfyUI observation is stale')
   self.gpu_tuning.mark_stale()
-  self.latest={**self.latest,'running':None,'queued':None,'live_speed':None,'prefill_speed':None}
+  self.latest={**self.latest,'running':None,'queued':None,'occupied_slots':None,'outside_slots':None,'live_speed':None,'prefill_speed':None}
   self.speed.set(fmt(self.latest.get('last_speed'),' tok/s'))
   self.speed_note.set('Last completed request · reading is stale' if number(self.latest.get('last_speed')) is not None else 'Live output unavailable')
   if self.compact:return
@@ -736,7 +743,7 @@ class PerformancePanel:
   self.throughput_source.set('Last completed request · reading is stale')
   self.prompt_note.set('Last completed request · reading is stale')
   for mark in self.source_marks.values():mark.configure(text='◷ stale',fg=THEME['muted'])
-  self.requests.set('— active');self.requests_note.set('— waiting')
+  self.requests.set('— in flight');self.requests_note.set('— queued')
   self.plot_values['output'].set('—');self.plot_values['gpu'].set('—');self.plot_values['cpu'].set('—')
   self.context_summary.set('Context · reading is stale')
   self.details['model'].set('Status unavailable · stale reading')
@@ -797,8 +804,8 @@ class PerformancePanel:
   self.ram_memory.set(self._memory(h.get('ram_used'),h.get('ram_total')))
   self.ram_meter['value']=min(100,max(0,ratio(h.get('ram_used'),h.get('ram_total'),100) or 0))
   self.ram_note.set(fmt(h.get('ram_free_gib'),' GiB available') if number(h.get('ram_free_gib')) is not None else 'Not available')
-  self.requests.set(f"{fmt(s.get('running'),digits=0)} active")
-  self.requests_note.set(f"{fmt(s.get('queued'),digits=0)} waiting")
+  self.requests.set(f"{fmt(s.get('running'),digits=0)} in flight")
+  self.requests_note.set(f"{fmt(s.get('queued'),digits=0)} queued")
   self.plot_values['output'].set(fmt(speed,' tok/s'))
   self.plot_values['gpu'].set(fmt(h.get('gpu_util'),'%',0));self.plot_values['cpu'].set(fmt(h.get('cpu'),'%',0))
   self.context_summary.set('Context · per agent' if s.get('slots') else 'Context · live occupancy unavailable')
@@ -843,14 +850,28 @@ class PerformancePanel:
  def draw_agents(self):
   if self.compact:return
   c=self.agent_activity;c.delete('all');s=self.latest
-  capacity=number(s.get('capacity'));active=number(s.get('running'))
-  if capacity is None or active is None:
-   c.create_text(0,11*self.scale,text='Activity unavailable',anchor='w',fill=THEME['muted'],font=self._plot_font('caption'));return
-  for index in range(min(4,int(capacity))):
-   x=index*22*self.scale;y=11*self.scale
-   c.create_oval(x,y-4*self.scale,x+8*self.scale,y+4*self.scale,fill=THEME['success'] if index<active else THEME['line'],outline='')
-  label=f'{capacity:.0f} '+('agent' if capacity==1 else 'agents')
-  c.create_text(min(4,int(capacity))*22*self.scale,11*self.scale,text=label,anchor='w',fill=THEME['muted'],font=self._plot_font('caption'))
+  capacity=number(s.get('capacity'));occupied=number(s.get('occupied_slots'));active=number(s.get('running'))
+  if active is None:
+   label='Activity unavailable';count=0
+  elif capacity is None:
+   label='Slot capacity unavailable';count=0
+  else:
+   label=f'{fmt(occupied,digits=0)} / {capacity:.0f} slots'
+   outside=number(s.get('outside_slots'))
+   if outside:label+=f' · {outside:.0f} outside'
+   count=min(16,max(0,int(capacity))) if occupied is not None else 0
+  self.slot_help.set('In flight includes requests preparing input, running in a slot, or between engine turns. '
+                     'Slots show reported engine occupancy / serving capacity. '
+                     'Outside-slot requests may be preparing or waiting; they are not an inferred queue.')
+  font=self._plot_font('caption');width=max(1,c.winfo_width())
+  text_width=int(c.tk.call('font','measure',font,label));step=16*self.scale
+  # Draw the full capacity when it fits; otherwise keep the numeric count intact.
+  if count*step+text_width>width:count=0
+  for index in range(count):
+   x=index*step;y=11*self.scale
+   c.create_oval(x,y-4*self.scale,x+8*self.scale,y+4*self.scale,
+                 fill=THEME['success'] if index<occupied else THEME['line'],outline='')
+  c.create_text(count*step,11*self.scale,text=label,anchor='w',fill=THEME['muted'],font=font)
 
  def draw_context(self):
   if self.compact:return

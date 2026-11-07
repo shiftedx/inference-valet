@@ -26,6 +26,8 @@ class InfernixTelemetryTests(unittest.TestCase):
         self.assertEqual(result["ttft_ms"], 100)
         self.assertEqual(result["prompt_read"], 12000)
         self.assertEqual(result["queued"], 1)
+        self.assertEqual(result["capacity"], 4)
+        self.assertEqual(result["occupied_slots"], 2)
         self.assertEqual([slot["used"] for slot in result["slots"]], [12000, 1100])
         self.assertEqual(result["reuse"], 75)
         self.assertIsNone(result["expert_hits"])
@@ -45,3 +47,12 @@ class InfernixTelemetryTests(unittest.TestCase):
         self.assertIsNone(result["last_speed"])
         restarted, _ = adapt_ninfer_stats({**stats, "uptime_seconds": 1}, stats)
         self.assertIsNone(restarted["live"]["tok_s"])
+
+    def test_strata_inflight_can_exceed_occupied_engine_slots(self):
+        result=normalize_strata({'engine':{'batch_slots':4},'live':{
+            'state':'generating','running':6,'queued':0,'outside_slots':2,
+            'slots':[{'state':'decoding'} for _ in range(4)]}})
+        self.assertEqual(result['running'],6)
+        self.assertEqual(result['capacity'],4)
+        self.assertEqual(result['occupied_slots'],4)
+        self.assertEqual(result['outside_slots'],2)

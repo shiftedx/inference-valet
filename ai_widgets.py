@@ -192,7 +192,7 @@ class Button(tk.Button):
 
     def configure(self,cnf=None,**kw):
         result=super().configure(cnf,**kw)
-        if self.ready and (cnf or any(key in kw for key in ('text','state'))):self._paint()
+        if self.ready and (cnf or any(key in kw for key in ('text','state','font'))):self._paint()
         return result
 
     config=configure
@@ -213,8 +213,14 @@ class Button(tk.Button):
             fill=THEME['raised'] if self.hover or not self.quiet else background
             ink=THEME['text'];outline=fill if self.quiet else THEME['line']
         if self.focused:outline=THEME['focus']
-        natural_width=tkfont.Font(font=self.cget('font')).measure(self.cget('text'))+round(30*self.factor)
-        width=max(natural_width,self.winfo_width());height=control_height(self)
+        # Measure the exact font Tk renders, including named fonts after a DPI change.
+        self.factor=scale(self)
+        font=self.cget('font')
+        text_width=int(self.tk.call('font','measure',font,self.cget('text')))
+        line_height=int(self.tk.call('font','metrics',font,'-linespace'))
+        natural_width=text_width+round(30*self.factor)
+        width=max(natural_width,self.winfo_width())
+        height=max(round(CONTROL_HEIGHT*self.factor),line_height+round(16*self.factor))
         appearance=(self.cget('text'),fill,ink,outline,width,height)
         if appearance==self._appearance:return
         self._appearance=appearance

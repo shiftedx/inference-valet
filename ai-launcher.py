@@ -553,14 +553,17 @@ class LauncherUI:
   self.dashboard_canvas=canvas;self.dashboard_scrollbar=scrollbar;self.dashboard_frame=frame
   hero=tk.Frame(frame,bg=THEME['bg']);hero.pack(fill='x')
   controls=tk.Frame(hero,bg=hero.cget('bg'));controls.pack(fill='x',pady=(round(4*self.ui_scale),0))
-  picker_group=tk.Frame(controls,bg=hero.cget('bg'));picker_group.pack(side='left',fill='x',expand=True,padx=(0,round(8*self.ui_scale)))
+  picker_group=tk.Frame(controls,bg=hero.cget('bg'));picker_group.grid(row=0,column=0,sticky='ew',padx=(0,round(8*self.ui_scale)))
+  controls.columnconfigure(0,weight=1);picker_group.columnconfigure(0,weight=1)
   self.picker=ProfileSelect(picker_group,width=16,textvariable=self.selected,values=[PROFILE_NAMES[k] for k in self.keys],state='readonly')
-  self.picker.pack(side='left',fill='x',expand=True)
+  self.picker.grid(row=0,column=0,sticky='ew')
   self.edit_button=Button(picker_group,text='Edit',command=self.edit_profile)
-  self.edit_button.pack(side='right',padx=(round(8*self.ui_scale),0))
-  actions=tk.Frame(controls,bg=hero.cget('bg'));actions.pack(side='right')
+  self.edit_button.grid(row=0,column=1,padx=(round(8*self.ui_scale),0))
+  actions=tk.Frame(controls,bg=hero.cget('bg'));actions.grid(row=0,column=1,sticky='e')
   self.start_button=Button(actions,text='Load model',primary=True,command=lambda:self.begin('start'));self.start_button.pack(side='left')
-  self.stop_button=Button(actions,text='Unload model',command=lambda:self.begin('stop'));self.stop_button.pack(side='left',padx=(6,0))
+  self.stop_button=Button(actions,text='Unload model',command=lambda:self.begin('stop'));self.stop_button.pack(side='left',padx=(round(8*self.ui_scale),0))
+  self.model_controls=controls;self.model_picker_group=picker_group;self.model_actions=actions;self.model_controls_stacked=None
+  controls.bind('<Configure>',lambda event:self.fit_model_controls())
   self.control_tooltips(self.picker,self.start_button,self.stop_button)
   Tooltip(self.edit_button,'Changes apply on the next model load.')
   self.model_divider=tk.Frame(hero,bg=THEME['line'],height=1);self.model_divider.pack(fill='x',pady=(10,8))
@@ -871,7 +874,7 @@ class LauncherUI:
   if explanation:self.auto_note.pack(fill='x',pady=(4,0))
   else:self.auto_note.pack_forget()
   status=self.status.get()
-  if 'start' in self.active:
+  if 'start' in self.active or 'provider' in self.active:
    title='Loading model…';profile=PROFILE_NAMES.get(self.selected_profile(),'')
    note='Your current model will be replaced.' if self.current or status.startswith('Running: ') else 'Preparing your model…'
   elif 'stop' in self.active:title='Unloading model…';profile='';note='GPU memory will be freed.'
@@ -916,8 +919,12 @@ class LauncherUI:
   status_note=note if state not in ('ready','reading','generating') else ''
   for blocker in (activity.get('blockers') or []) if fresh else []:
    if blocker and blocker not in status_note:status_note+=('\n' if status_note else '')+blocker
+  display_profile=self.selected_profile() if self.active & {'start','provider'} else self.current
+  engine=PROFILES.get(display_profile,{}).get('engine')
+  if not engine:engine=activity.get('engine') if fresh else None
+  if not engine:engine=PROFILES.get(self.selected_profile(),{}).get('engine')
   for panel in (self.performance,self.popup_performance):
-   if panel:panel.set_activity_status(title,status_note,state)
+   if panel:panel.set_activity_status(title,status_note,state,engine)
   if self.popup:
    helpful=note if title not in ('Ready','Model running','Checking model…','Reading prompt','Generating','Working','Loaded','Restore paused','No model loaded','Loading model','Loading model…') else ''
    if title in ('Unloaded','Waiting for request'):helpful='Loads on next request.'
@@ -928,11 +935,21 @@ class LauncherUI:
    else:self.popup_note.pack_forget()
    if explanation and self.auto_enabled:self.popup_auto_note.pack(fill='x',before=self.popup_restore_divider,pady=(round(4*self.ui_scale),0))
    else:self.popup_auto_note.pack_forget()
+ def fit_model_controls(self):
+  gap=round(8*self.ui_scale)
+  required=round(180*self.ui_scale)+self.edit_button.winfo_reqwidth()+self.model_actions.winfo_reqwidth()+2*gap
+  stacked=self.model_controls.winfo_width()<required
+  if stacked==self.model_controls_stacked:return
+  self.model_controls_stacked=stacked
+  self.model_picker_group.grid_configure(row=0,column=0,columnspan=2 if stacked else 1,padx=0 if stacked else (0,gap))
+  self.model_actions.grid_configure(row=1 if stacked else 0,column=0 if stacked else 1,columnspan=2 if stacked else 1,pady=(gap,0) if stacked else 0)
+
  def update_controls(self):
   if self.tray_context and self.tray_context.window.state()!='withdrawn':self.tray_context.refresh()
   self.refresh_display()
   load_label='Switch model' if self.current or self.status.get().startswith('Running: ') or 'start' in self.active else 'Load model'
   self.start_button.configure(text=load_label)
+  self.fit_model_controls()
   self.start_button.configure(state='disabled' if self.active or not self.keys else 'normal')
   self.stop_button.configure(state='disabled' if 'stop' in self.active else 'normal')
   self.picker.configure(state='disabled' if self.active or not self.keys else 'readonly')
@@ -982,6 +999,16 @@ class LauncherUI:
    elif kind=='context':self.show_context(payload)
    elif kind=='quit':
     if self.quit():return
+   elif kind=='provider-start':
+    self.active.add('provider');self.epoch+=1
+    self.selected.set(PROFILE_NAMES[payload]);self.status.set('Preparing profile switch...');self.update_controls()
+   elif kind=='provider-finished':
+    key,result,error=payload;self.active.discard('provider');self.epoch+=1;self.latest_performance={}
+    if error:
+     self.current=None;self.status.set('Action failed: '+error[:500])
+     self.notify_issue(record_issue(failure_code(error),error,action='provider-load'))
+    else:self.current=key;self.status.set('Running: '+PROFILE_NAMES[key])
+    self.update_controls()
    elif kind=='status':self.status.set(payload);self.update_controls()
    elif kind=='snapshot':
     self.refreshing=False
@@ -1088,6 +1115,47 @@ class LauncherUI:
   # Hidden status needs only a heartbeat; a live backend does not make graphs visible.
   self.refresh_timer=self.window.after(2000 if visible else 10000,self.refresh)
 
+def provider_router(events=None):
+ from ai_provider_runtime import ProfileRouter,active_profile
+ def active(profiles):return active_profile(profiles,servers,strata_listener,ai_ninfer.owned_process,fetch,STRATA)
+ def load(key):
+  if events:events.put(('provider-start',key))
+  try:
+   result=start_profile(key,lambda text:events.put(('status',text)) if events else None)
+   if result.get('cancelled'):raise RuntimeError('Model startup was cancelled.')
+  except Exception as exc:
+   if events:events.put(('provider-finished',(key,None,str(exc))))
+   else:record_issue(failure_code(str(exc)),str(exc),action='provider-load')
+   raise
+  if events:events.put(('provider-finished',(key,result,None)))
+  return result
+ return ProfileRouter(active,load)
+
+def provider_server(router=None,**bind):
+ from ai_provider import make_server
+ from ai_provider_runtime import catalog,loaded_profile
+ router=router or provider_router()
+ def resident(profiles):return loaded_profile(profiles,servers,strata_listener,ai_ninfer.owned_process,fetch,STRATA)
+ return make_server(strata_api_key(),lambda:catalog(PROFILES,PROFILE_STORE),router.active,router=router,loaded_profile=resident,**bind)
+
+@contextlib.contextmanager
+def running_providers(events=None):
+ router=provider_router(events)
+ with contextlib.ExitStack() as stack:
+  bindings=[{}]
+  if lan:=CONFIG.get('provider_lan'):bindings.append(dict(lan=lan,port=8080,lan_clients=CONFIG.get('provider_lan_clients')))
+  providers=[]
+  for bind in bindings:
+   try:
+    provider=stack.enter_context(provider_server(router=router,**bind))
+   except (OSError,ValueError) as exc:
+    record_issue('provider_unavailable',f'Valet provider listener failed: {exc}')
+    continue
+   threading.Thread(target=provider.serve_forever,daemon=True).start()
+   stack.callback(provider.shutdown)
+   providers.append(provider.server_address)
+  yield providers
+
 def gui(stop=False,check=False,hidden=False):
  if check:
   app=LauncherUI(enable_tray=False,observe=False);app.hide();count=len(app.picker['values']);app.quit();return count
@@ -1102,17 +1170,26 @@ def gui(stop=False,check=False,hidden=False):
    time.sleep(.1)
   raise RuntimeError('The tray app is already starting. Try Start AI again shortly.')
  try:
-  app=LauncherUI(events,hidden=hidden);app.window.mainloop()
+  app=LauncherUI(events,hidden=hidden)
+  if strata_api_key():
+   with running_providers(app.events):app.window.mainloop()
+  else:app.window.mainloop()
  finally:mailbox.close()
 
 def main():
- ap=argparse.ArgumentParser();ap.add_argument('--start',choices=list(PROFILES));ap.add_argument('--stop',action='store_true');ap.add_argument('--gui-stop',action='store_true');ap.add_argument('--tray',action='store_true');ap.add_argument('--diagnose',action='store_true');ap.add_argument('--list',action='store_true');ap.add_argument('--check-ui',action='store_true');a=ap.parse_args()
+ ap=argparse.ArgumentParser();ap.add_argument('--start',choices=list(PROFILES));ap.add_argument('--stop',action='store_true');ap.add_argument('--gui-stop',action='store_true');ap.add_argument('--tray',action='store_true');ap.add_argument('--diagnose',action='store_true');ap.add_argument('--list',action='store_true');ap.add_argument('--check-ui',action='store_true');ap.add_argument('--serve-api',action='store_true');a=ap.parse_args()
  def report(text):
   if sys.stdout:print(text,flush=True)
  if a.diagnose:report(json.dumps(diagnose(),indent=2))
  elif a.list:
   report(json.dumps({k:{f:p[f] for f in ['label','engine','model','profile','context','slots']} for k,p in PROFILES.items()},indent=2))
  elif a.check_ui:report(str(gui(check=True)))
+ elif a.serve_api:
+  if not strata_api_key():raise ValueError('Set the Valet API token before starting the provider endpoint.')
+  with running_providers() as providers:
+   if not providers:raise RuntimeError('No Valet provider listeners could start.')
+   for host,port in providers:report(f'Valet provider ready at http://{host}:{port}/v1')
+   threading.Event().wait()
  elif a.start:report(json.dumps(start_profile(a.start,report)))
  elif a.stop:
   IDLE_SETTINGS.update(demand_armed=False)
