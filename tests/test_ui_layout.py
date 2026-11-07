@@ -294,6 +294,29 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(stretched.winfo_reqwidth(),natural)
         finally:app.quit()
 
+    def test_model_actions_wrap_without_clipping_and_font_changes_resize_buttons(self):
+        from tkinter import font as tkfont
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            app.current=app.keys[0];app.update_controls();app.window.update_idletasks()
+            button=app.start_button
+            enlarged=tkfont.Font(root=button,font=button.cget('font'))
+            enlarged.configure(size=18)
+            button.configure(font=enlarged)
+            app.window.update_idletasks()
+            measured=int(button.tk.call('font','measure',button.cget('font'),button.cget('text')))
+            line=int(button.tk.call('font','metrics',button.cget('font'),'-linespace'))
+            self.assertGreaterEqual(button.winfo_reqwidth(),measured+round(30*app.ui_scale))
+            self.assertGreaterEqual(button.winfo_reqheight(),line+round(16*app.ui_scale))
+            app.window.minsize(1,1);app.window.geometry(f'{round(420*app.ui_scale)}x{round(580*app.ui_scale)}')
+            app.window.update();app.fit_model_controls();app.window.update()
+            self.assertTrue(app.model_controls_stacked)
+            self.assertGreaterEqual(app.start_button.winfo_rooty(),app.picker.winfo_rooty()+app.picker.winfo_height())
+            for widget in (app.edit_button,app.start_button,app.stop_button):
+                self.assertGreaterEqual(widget.winfo_width(),widget.winfo_reqwidth())
+                self.assertLessEqual(widget.winfo_rootx()+widget.winfo_width(),app.model_controls.winfo_rootx()+app.model_controls.winfo_width())
+        finally:app.quit()
+
     def test_loading_copy_only_mentions_replacement_for_switches(self):
         app = launcher.LauncherUI(enable_tray=False, observe=False)
         try:
@@ -477,6 +500,63 @@ class LayoutTests(unittest.TestCase):
                     self.assertEqual(restore_row.winfo_y(),restore_y)
                     app.active.clear()
                 finally:app.quit()
+
+    def test_backend_status_tracks_loading_target_then_running_profile(self):
+        import time
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            strata,infernix=app.keys[:2]
+            profiles={**launcher.PROFILES,
+                      strata:{**launcher.PROFILES[strata],'engine':'strata'},
+                      infernix:{**launcher.PROFILES[infernix],'engine':'infernix'}}
+            with patch.object(launcher,'PROFILES',profiles):
+                app.current=strata
+                app.selected.set(launcher.PROFILE_NAMES[infernix])
+                app.latest_performance={'sampled':time.monotonic(),
+                                        'activity':{'engine':'strata','state':'ready','title':'Ready'}}
+                app.show_popup(anchor=(100,100))
+                app.active.add('start')
+                app.refresh_display()
+                for panel in (app.performance,app.popup_performance):
+                    self.assertEqual(panel.activity_title.get(),'Infernix · Loading model…')
+                app.active.clear()
+                app.current=infernix
+                app.selected.set(launcher.PROFILE_NAMES[strata])
+                app.latest_performance={'sampled':time.monotonic(),
+                                        'activity':{'engine':'infernix','state':'ready','title':'Ready'}}
+                app.refresh_display()
+                for panel in (app.performance,app.popup_performance):
+                    self.assertEqual(panel.activity_title.get(),'Infernix · Ready')
+                app.current=strata
+                app.latest_performance={}
+                app.refresh_display()
+                self.assertEqual(app.performance.activity_title.get(),'Strata · Ready')
+        finally:
+            app.active.clear()
+            app.quit()
+
+    def test_provider_loading_events_update_dashboard_and_clear_busy_state(self):
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            key=app.keys[0]
+            profiles={**launcher.PROFILES,key:{**launcher.PROFILES[key],'engine':'infernix'}}
+            with patch.object(launcher,'PROFILES',profiles):
+                app.events.put(('provider-start',key));app.poll()
+                self.assertIn('provider',app.active)
+                self.assertEqual(app.performance.activity_title.get(),'Infernix · Loading model…')
+                app.events.put(('provider-finished',(key,{'profile':key},None)));app.poll()
+                self.assertFalse(app.active)
+                self.assertEqual(app.current,key)
+                self.assertEqual(app.performance.activity_title.get(),'Infernix · Ready')
+                with patch.object(app,'notify_issue'),patch.object(launcher,'record_issue'):
+                    app.events.put(('provider-start',key))
+                    app.events.put(('provider-finished',(key,None,'Startup cancelled')))
+                    app.poll()
+                self.assertFalse(app.active)
+                self.assertIsNone(app.current)
+                self.assertIn('Action failed',app.status.get())
+        finally:
+            app.active.clear();app.quit()
 
     def test_controller_attention_wins_over_routine_telemetry_and_stale_blockers_clear(self):
         import time

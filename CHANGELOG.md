@@ -1,5 +1,13 @@
 # Changes
 
+## 0.4.0
+
+- Serve an authenticated OpenAI-compatible Valet endpoint with dynamic profile loading and a shared local/LAN request queue; drain active streams before switching models.
+- Advertise request context, shared or per-slot KV capacity, output limits and verified loaded-profile metadata for agent context budgeting.
+- Fix overlapping dashboard controls and distinguish in-flight requests from occupied engine slots.
+- Show backend-specific activity and loading labels while retaining Infernix and NInferEZ telemetry.
+- Preserve external profiles, model caches, game admission and manual Unload controls.
+
 ## 0.3.2
 
 - Discover and manage native Windows Infernix and NInferEZ model profiles alongside Strata.

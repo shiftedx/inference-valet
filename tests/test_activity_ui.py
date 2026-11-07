@@ -59,6 +59,29 @@ class ActivityPanelTests(unittest.TestCase):
         self.assertNotIn('private', str(processes))
         self.assertEqual(len(panel.metric_widgets), 6)
 
+    def test_activity_prefix_uses_reported_backend(self):
+        panel=PerformancePanel(self.root,compact=True)
+        for engine,prefix in (('infernix','Infernix · '),('ninfer','NInferEZ · '),('strata','Strata · '),(None,'')):
+            panel.update({'activity':{'engine':engine,'state':'loading','title':'Loading model'}})
+            self.assertEqual(panel.activity_title.get(),prefix+'Loading model')
+
+    def test_request_counts_distinguish_inflight_from_occupied_slots(self):
+        panel=PerformancePanel(self.root)
+        panel.pack(fill='both',expand=True)
+        self.root.update_idletasks()
+        for capacity,occupied,inflight,outside in ((4,4,6,2),(8,6,6,0)):
+            panel.update({'running':inflight,'queued':0,'capacity':capacity,
+                          'occupied_slots':occupied,'outside_slots':outside})
+            self.root.update_idletasks()
+            self.assertEqual(panel.requests.get(),f'{inflight} in flight')
+            labels=[panel.agent_activity.itemcget(i,'text') for i in panel.agent_activity.find_all()
+                    if panel.agent_activity.type(i)=='text']
+            self.assertIn(f'{occupied} / {capacity} slots',labels[0])
+            self.assertNotIn('agents',labels[0])
+            if outside:self.assertIn(f'{outside} outside',labels[0])
+        panel.mark_stale()
+        self.assertIsNone(panel.latest['occupied_slots'])
+
     def test_compact_unavailable_does_not_claim_idle(self):
         panel = PerformancePanel(self.root, compact=True)
         panel.pack(fill='x')
@@ -91,8 +114,8 @@ class ActivityPanelTests(unittest.TestCase):
         panel.mark_stale()
         self.assertEqual(panel.activity_title.get(), 'Status unavailable')
         self.assertIn('stale', panel.activity_note.get())
-        self.assertEqual(panel.requests.get(), '— active')
-        self.assertEqual(panel.requests_note.get(), '— waiting')
+        self.assertEqual(panel.requests.get(), '— in flight')
+        self.assertEqual(panel.requests_note.get(), '— queued')
         self.assertEqual(panel.speed.get(), '42.0 tok/s')
         self.assertIn('Last completed request', panel.speed_note.get())
         self.assertEqual(len(panel.request_history), 1)

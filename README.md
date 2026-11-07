@@ -3,16 +3,16 @@
 <h1 align="center">Inference Valet</h1>
 
 <p align="center"><b>Your GPU when you game. Your model when you need it.</b><br>
-Automatic game detection, model loading and idle restore for Strata on Windows.</p>
+Automatic game detection, model loading and idle restore for Strata and NInfer-family engines on Windows.</p>
 
 <p align="center">
-  <img src="docs/assets/version.svg" alt="Version 0.3.1">
+  <img src="docs/assets/version.svg" alt="Version 0.4.0">
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011-a5c6af" alt="Windows 10 / 11">
   <img src="https://img.shields.io/badge/Python-3.11%2B-a5c6af" alt="Python 3.11+">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-a5c6af" alt="MIT license"></a>
 </p>
 
-<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.3.1">Download v0.3.1</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
+<p align="center"><a href="https://github.com/shiftedx/inference-valet/releases/tag/v0.4.0">Download v0.4.0</a> · <a href="#run">Install</a> · <a href="docs/SETUP.md">Configure</a> · <a href="AGENTS.md">Agents</a> · <a href="BRANDING.md">Branding</a></p>
 
 <p align="center"><a href="docs/assets/panel.png"><img src="docs/assets/panel.png" width="760" alt="Performance dashboard with model controls, restore timer, output/GPU/CPU plots and memory metrics"></a></p>
 
@@ -20,7 +20,7 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 |---|---|
 | Detect Steam games, Windows game records, configured executables and fullscreen/presentation activity. Block new loads; optional on-demand mode unloads after its game grace period. | Eager mode restores the last profile after **5–30 idle minutes**. Optional on-demand mode loads on the first request when games and resource guards permit. |
 | **Native controls** | **Performance at a glance** |
-| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Backend-supported timing, GPU/RAM, clocks, temperature, memory activity, power and Strata active-power average. Scrollable technical tables; validated engine settings apply on the next load. |
+| Load, switch, unload; close to tray. Edit context, agents, KV, reasoning/output limits and engine tuning. Saved changes apply on the next profile launch. | Backend-supported timing, GPU/RAM, clocks, temperature, memory activity, power and active-power average. Scrollable technical tables; validated engine settings apply on the next load. |
 
 <p align="center"><img src="docs/assets/lifecycle.svg" width="940" alt="Detected game pauses loading; game closes and PC becomes idle: restore; optional first-request loading"></p>
 
@@ -36,7 +36,9 @@ Automatic game detection, model loading and idle restore for Strata on Windows.<
 </details>
 
 - **Memory activity:** VRAM read/write busy time; capacity: GiB meter.
-- **Strata avg:** whole-GPU power sampled during Strata work; resets when Valet restarts.
+- **Active avg:** whole-GPU power sampled during verified backend work; resets when Valet restarts.
+
+Use the [Valet provider endpoint](docs/BACKENDS.md#valet-provider) for dynamic model loading and context/KV budget metadata in compatible agent clients.
 
 ## Run
 
@@ -74,7 +76,7 @@ notepad .\config.json
 |---|---|
 | Upgrade | Exit Valet; update application files; rerun `scripts/setup.ps1` · [Preserve config and state](docs/SETUP.md#install--upgrade) |
 | Uninstall | Exit Valet; run `scripts/uninstall.ps1` · [Removal and retained data](docs/SETUP.md#uninstall) |
-| Changes | [v0.3.1](CHANGELOG.md) |
+| Changes | [v0.4.0](CHANGELOG.md) |
 
 ## Startup / checks
 
