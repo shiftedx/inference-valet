@@ -1,5 +1,13 @@
 # Changes
 
+## 0.4.1
+
+- Advertise configured vision support and image input modalities in model discovery without loading models.
+- Read provider bodies in bounded chunks and record redacted rejection reasons, byte counts and correlated request IDs; retain existing response semantics, body limit and inactivity timeout.
+- Cover large valid JSON uploads, malformed framing and body timeouts with regression tests.
+- Package optional native Strata diagnostics for unresolved/incomplete tool calls, with separate installation instructions and CPU/mock tests.
+- Preserve external profile tuning and NInferEZ loaded-profile discovery.
+
 ## 0.4.0
 
 - Serve an authenticated OpenAI-compatible Valet endpoint with dynamic profile loading and a shared local/LAN request queue; drain active streams before switching models.

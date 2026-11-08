@@ -2,7 +2,7 @@
 
 | Project | Use | License |
 |---|---|---|
-| [Strata](https://github.com/Niko1221/Strata) | External engine and native HTTP; not bundled | MIT; component/model licenses remain separate |
+| [Strata](https://github.com/Niko1221/Strata) | External engine/native HTTP; optional diagnostic patch with upstream license; engine not bundled | MIT; component/model licenses remain separate |
 | [Python / Tcl/Tk](https://www.python.org/) | Native UI | PSF / Tcl/Tk terms |
 | [psutil](https://github.com/giampaolo/psutil) | Process identity, telemetry | BSD-3-Clause |
 | [Pillow](https://python-pillow.github.io/) | Icons and widget surfaces | HPND |

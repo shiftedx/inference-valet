@@ -56,3 +56,18 @@
 - Send the requested profile ID to `POST /v1/chat/completions` or Strata's `POST /v1/responses`. Valet loads an inactive profile, waits for readiness, then forwards the request. Allow up to 620 seconds for loading or waiting behind another model's requests.
 - Same-profile requests run concurrently. Model switches wait for existing Valet requests and streams to finish; local and LAN endpoints share the queue. Manual Unload still cancels startup.
 - Backend model IDs are accepted when active or unambiguous. Use a profile ID to select context/slot variants. Unknown IDs and unsupported endpoints never trigger a load. Load failures return `503 model_load_failed`; queue timeouts return `503 model_wait_timeout`. A running Strata listener can still warm on demand under its existing guards.
+
+### Vision discovery
+
+- `supports_vision` and `input_modalities` advertise the **configured** profile: `["text", "image"]` when enabled, otherwise `["text"]`. They do not load or probe a model. `loaded` separately verifies the resident launch.
+- For an installed Infernix artifact with vision support, append `--vision --vision-offload on` to its existing `args` in local config, preserving its tuning. Offload keeps the tower in system RAM and borrows GPU memory while encoding images. Reopen Valet and load the profile when active work is finished. Valet does not rewrite profiles or assume every artifact supports vision.
+- Strata discovery requires `--vision` and its vision executable, projection and model settings. A configured vision section does not prove GPU execution; inspect native encoder logs for CPU fallback.
+- Submit images through Chat Completions `image_url` content parts. Model discovery extensions are documented here for agent clients; clients must opt into using them.
+
+### Provider rejection diagnostics
+
+- Before routing, malformed inference requests retain the existing HTTP 400 response. Oversized bodies return HTTP 413; the limit remains 64 MiB. Chunked transfer is unsupported; send one valid `Content-Length`.
+- Rejections carry `X-Request-ID`. Match it to a `provider_request_rejected` event under the configured state directory's `issues/` folder. Events contain a fixed reason code, declared/received byte counts, elapsed time, endpoint and optional fixed exception class. Retention follows the existing bounded issue store.
+- Reasons distinguish missing/invalid lengths, unsupported transfer encoding, oversize or incomplete bodies, read errors/timeouts, invalid JSON/UTF-8, non-object JSON and invalid model fields. Bodies, images, header values, exception text and credentials are not logged.
+- The socket timeout remains **30 seconds without read progress**, not a 30-second total request deadline. Model loading/forwarding waits are separate. Body validation runs before profile selection; a 400 here does not establish a model/router failure.
+- Optional native Strata tool-call diagnostics are packaged separately: see [patch instructions](../backends/strata/patches/README.md). Application upgrades do not modify a live external backend.

@@ -1,0 +1,107 @@
+--- a/serve/frontend.py
++++ b/serve/frontend.py
+@@ -1203,6 +1203,8 @@
+                     aliases.setdefault(prefix + name, set()).add(name)
+         self.aliases = {alias: next(iter(names)) for alias, names in aliases.items()
+                         if len(names) == 1 and alias not in self.schemas}
++        self.unresolved_calls = 0
++        self.unresolved_names: list[str] = []
+         self.unread = 0              # #3441: `<tool_call>` blocks that opened like a call and were returned as text
+         self.unread_names: list[str] = []   # the names (first few) of those that named a tool the request did not declare
+         # stream_tools: a tool call is also reported while it is being written - "tool_start" (its name and id) as
+@@ -1915,7 +1917,8 @@
+             return out
+         if self.state == "call" and self.stream_tools and self.scall is not None:
+             out += self._scan()                 # the output ended inside a call that was already announced
+-            if self.ss == "function_done" and not self.buf[self.sp:].strip() and reason in (None, "stop"):
++            completed = self.ss == "function_done" and not self.buf[self.sp:].strip() and reason in (None, "stop")
++            if completed:
+                 # A natural end immediately after </function> retains native streaming recovery.
+                 out += self._close_scan()
+                 call = self.scall
+@@ -1927,12 +1930,25 @@
+                 out.append(Event("tool_call", call=call))
+             elif self.ss == "function_done":
+                 out.append(Event("content", self._track(CALL_START + self.buf)))
++            if not completed and self.scall.name in self.schemas:
++                self.unresolved_calls += 1
++                if len(self.unresolved_names) < 5:
++                    self.unresolved_names.append(re.sub(r"[^A-Za-z0-9_.:-]", "?", self.scall.name)[:80])
+             self.buf = ""
+             self._reset_scan()
+             return out
+         if self.state == "reasoning" and self.buf == THINK_END:   # the output ends on a held `</think>`: its end
+             self.buf, self.state = "", "content"
+         if self.buf:
++            if self.state in ("call", "json"):
++                opener = re.search(r"<function=([^>]+)>", self.buf)
++                if opener:
++                    name = opener.group(1).strip()
++                    name = self.aliases.get(name, name)
++                    if name in self.schemas:
++                        self.unresolved_calls += 1
++                        if len(self.unresolved_names) < 5:
++                            self.unresolved_names.append(re.sub(r"[^A-Za-z0-9_.:-]", "?", name)[:80])
+             # an unfinished call inside the reasoning (#804) is reasoning text, never a call
+             kind = {"reasoning": "reasoning", "rcall": "reasoning", "content": "content"}.get(self.state, "content")
+             text = CALL_START + self.buf if self.state in ("call", "json") and not self.bare else self.buf
+@@ -1955,6 +1971,9 @@
+         except ValueError:
+             if not self.recover:
+                 raise
++            self.unresolved_calls += 1
++            if len(self.unresolved_names) < 5:
++                self.unresolved_names.append(re.sub(r"[^A-Za-z0-9_.:-]", "?", name)[:80])
+             self._reset_scan()
+             self.state = "content"
+             return [Event("content", self._track(body if bare else CALL_START + body + CALL_END))]
+--- a/serve/server.py
++++ b/serve/server.py
+@@ -6742,6 +6742,12 @@
+                 self.totals["tool_calls_unread"] = self.totals.get("tool_calls_unread", 0) + parser.unread
+             # #3796: the same names for the client (a machine-readable marker next to the text, which stays as the model wrote it)
+             rejected = [{"name": nm, "reason": "undeclared"} for nm in named or []]
++        if getattr(parser, "unresolved_calls", 0):
++            with self.status_lock:
++                self.totals["tool_calls_unresolved"] = self.totals.get("tool_calls_unresolved", 0) + parser.unresolved_calls
++            print(f"[strata] {parser.unresolved_calls} declared tool call(s) could not be completed or parsed and went back as text; "
++                  f"names: {', '.join(parser.unresolved_names)}; no tool arguments logged", flush=True)
++            rejected.extend({"name": nm, "reason": "unresolved_call"} for nm in parser.unresolved_names)
+         if stops is not None and stops.hit is None and stops.held:
+             yield "event", Event("content", stops.flush())     # the held tail was not a stop string after all
+         done = {"finish": finish, "completion_tokens": n, "reused": (timings or {}).get("cache_n", 0),
+--- /dev/null
++++ b/serve/test_malformed_diagnostics.py
+@@ -0,0 +1,32 @@
++import unittest
++from serve.frontend import OutputParser
++class MalformedDiagnostics(unittest.TestCase):
++    tools = [{"name": "run_code", "parameters": {"properties": {"code": {"type": "string"}}}}]
++    def test_malformed_call_is_observable(self):
++        raw = "<tool_call>\n<function=run_code>\n<parameter=code\n</function>\n</tool_call>"
++        for width in (1, 4, len(raw)):
++            parser = OutputParser(thinking=False, tools=self.tools, recover=True)
++            events = []
++            for index in range(0, len(raw), width): events.extend(parser.feed(raw[index:index+width]))
++            events.extend(parser.finish())
++            self.assertFalse([event for event in events if event.kind == "tool_call"])
++            self.assertEqual(parser.unresolved_calls, 1)
++            self.assertEqual(parser.unresolved_names, ["run_code"])
++    def test_valid_call_has_no_false_rejection(self):
++        parser = OutputParser(thinking=False, tools=self.tools, recover=True)
++        raw = "<tool_call>\n<function=run_code>\n<parameter=code>print(1)</parameter>\n</function>\n</tool_call>"
++        events = parser.feed(raw) + parser.finish()
++        self.assertEqual(len([event for event in events if event.kind == "tool_call"]), 1)
++        self.assertEqual(parser.unresolved_calls, 0)
++        self.assertEqual(parser.unresolved_names, [])
++
++    def test_incomplete_announced_stream_is_counted_without_executing_it(self):
++        raw = "<tool_call>\n<function=run_code>\n<parameter=code>print(1)"
++        for width in (1, 4, len(raw)):
++            parser = OutputParser(thinking=False, tools=self.tools, recover=True, stream_tools=True)
++            events = []
++            for index in range(0, len(raw), width): events.extend(parser.feed(raw[index:index+width]))
++            events.extend(parser.finish(reason="length"))
++            self.assertFalse([event for event in events if event.kind == "tool_call"])
++            self.assertEqual(parser.unresolved_calls, 1)
++            self.assertEqual(parser.unresolved_names, ["run_code"])
