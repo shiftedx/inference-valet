@@ -68,6 +68,35 @@ class CatalogMetadataTests(unittest.TestCase):
         self.assertIsNone(item['default_max_output_tokens'])
         self.assertEqual(item['kv_cache_tokens'], 524288)
 
+    def test_vision_follows_profile_configuration_without_loading(self):
+        args = self.native['args'] + ['--vision', '--vision-offload', 'on']
+        native = {**self.native, 'args': args}
+        info = model_info('n', catalog({'n': native}, self.store)['n'])
+        self.assertTrue(info['supports_vision'])
+        self.assertEqual(info['input_modalities'], ['text', 'image'])
+        self.assertFalse(info['loaded'])
+        self.assertEqual(info['kv_cache_tokens'], 262144)
+        text = model_info('n', catalog({'n': self.native}, self.store)['n'])
+        self.assertFalse(text['supports_vision'])
+        self.assertEqual(text['input_modalities'], ['text'])
+        self.assertNotIn('--vision', self.native['args'])
+
+    def test_strata_vision_requires_flag_and_complete_sidecar_settings(self):
+        path, shared, _ = self.store.paths('s')
+        vision = {'exe': 'vision.exe', 'mmproj': 'projection.gguf', 'model': 'model.gguf'}
+        for source, expected in [({}, False), ({'args': ['--vision']}, False),
+                                 ({'vision': vision}, False),
+                                 ({'args': ['--vision'], 'vision': {**vision, 'mmproj': ''}}, False),
+                                 ({'args': ['--vision'], 'vision': vision}, True)]:
+            with self.subTest(source=source):
+                path.write_text(json.dumps(source), encoding='utf-8')
+                info = model_info('s', catalog({'s': self.strata}, self.store)['s'])
+                self.assertEqual(info['supports_vision'], expected)
+                self.assertEqual(info['input_modalities'], ['text', 'image'] if expected else ['text'])
+        path.write_text('{broken', encoding='utf-8')
+        self.assertFalse(catalog({'s': self.strata}, self.store)['s']['supports_vision'])
+
+
 class LoadedProfileTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()

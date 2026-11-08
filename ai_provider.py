@@ -3,6 +3,9 @@ import hmac
 import ipaddress
 import http.client
 import json
+import time
+import uuid
+from ai_issues import record_issue
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
@@ -23,7 +26,8 @@ def model_info(key, profile, loaded=False):
                   parallel_slots=profile["slots"], loaded=bool(loaded))
     for field in ("kv_cache_tokens", "kv_shared", "kv_cache_tokens_per_slot",
                   "default_max_output_tokens", "max_output_tokens",
-                  "output_tokens_share_context", "context_reserved_tokens"):
+                  "output_tokens_share_context", "context_reserved_tokens",
+                  "supports_vision", "input_modalities"):
         if field in profile:
             result[field] = profile[field]
     return result
@@ -39,7 +43,7 @@ def alias_response(payload, profile_id):
     return payload
 
 
-def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None):
+def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue):
     """Bind loopback or a specific LAN address and restrict LAN peers to its subnet."""
     if not key:
         raise ValueError("Set the Valet API token before starting the provider endpoint.")
@@ -69,6 +73,8 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             data = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            if request_id := getattr(self, "request_id", None):
+                self.send_header("X-Request-ID", request_id)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -107,6 +113,23 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                 return
             self.error(404, "Unknown provider endpoint.", "not_found")
 
+        def reject_body(self, reason, status=400, exception_type=None):
+            # Counts and fixed reason codes only: never log bodies, header values or exception text.
+            details = dict(request_id=self.request_id, endpoint=urlsplit(self.path).path,
+                           reason=reason, status=status, body_bytes_declared=self.body_declared,
+                           body_bytes_received=self.body_received,
+                           elapsed_seconds=round(time.monotonic() - self.body_started, 3))
+            if exception_type:
+                details["exception_type"] = exception_type
+            try:
+                diagnostics("provider_request_rejected", "Valet rejected an inference request before routing.", **details)
+            except Exception:
+                pass  # Diagnostics must not prevent the HTTP response.
+            if status == 413:
+                self.error(413, "Request body is too large.", "request_too_large")
+            else:
+                self.error(400, "Send a JSON object with a model profile ID.", "invalid_request", "model")
+
         def do_POST(self):
             if not self.authorized():
                 return
@@ -114,19 +137,59 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             if path not in (CHAT, RESPONSES):
                 self.error(404, "Unknown provider endpoint.", "not_found")
                 return
+            self.request_id = uuid.uuid4().hex
+            self.body_declared = None
+            self.body_received = 0
+            self.body_started = time.monotonic()
+            if self.headers.get("Transfer-Encoding"):
+                self.reject_body("unsupported_transfer_encoding")
+                return
+            lengths = self.headers.get_all("Content-Length", [])
+            if not lengths:
+                self.reject_body("missing_content_length")
+                return
             try:
-                size = int(self.headers.get("Content-Length", ""))
-                if size < 1 or self.headers.get("Transfer-Encoding"):
+                if len(lengths) != 1:
                     raise ValueError
-                if size > MAX_BODY:
-                    self.error(413, "Request body is too large.", "request_too_large")
-                    return
-                payload = json.loads(self.rfile.read(size))
-                key = payload.get("model") if isinstance(payload, dict) else None
-                if not isinstance(key, str) or not key:
+                size = int(lengths[0])
+                if size < 1:
                     raise ValueError
-            except (ValueError, OSError):
-                self.error(400, "Send a JSON object with a model profile ID.", "invalid_request", "model")
+                self.body_declared = size
+            except ValueError:
+                self.reject_body("invalid_content_length")
+                return
+            if size > MAX_BODY:
+                self.reject_body("body_too_large", status=413)
+                return
+            body = bytearray()
+            try:
+                while self.body_received < size:
+                    chunk = self.rfile.read1(min(65536, size - self.body_received))
+                    if not chunk:
+                        self.reject_body("incomplete_body")
+                        return
+                    body.extend(chunk)
+                    self.body_received += len(chunk)
+            except TimeoutError:
+                self.reject_body("body_read_timeout", exception_type="TimeoutError")
+                return
+            except OSError:
+                self.reject_body("body_read_error", exception_type="OSError")
+                return
+            try:
+                payload = json.loads(body)
+            except UnicodeDecodeError:
+                self.reject_body("invalid_utf8")
+                return
+            except ValueError:
+                self.reject_body("invalid_json")
+                return
+            if not isinstance(payload, dict):
+                self.reject_body("not_json_object")
+                return
+            key = payload.get("model")
+            if not isinstance(key, str) or not key:
+                self.reject_body("invalid_model_field")
                 return
             catalog = profiles()
             active = active_profile(catalog)

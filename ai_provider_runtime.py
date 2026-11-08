@@ -42,7 +42,16 @@ def catalog(profiles, store):
                     kv_cache_tokens_per_slot=context if strata else None,
                     default_max_output_tokens=None, max_output_tokens=ceiling,
                     output_tokens_share_context=True, context_reserved_tokens=reserve)
+        item["supports_vision"] = False
         if strata:
+            try:
+                path, _, _ = store.paths(key)
+                source = read_object(path)
+                vision = source.get("vision")
+                item["supports_vision"] = ("--vision" in source.get("args", [])
+                    and isinstance(vision, dict) and all(vision.get(field) for field in ("exe", "mmproj", "model")))
+            except (OSError, ValueError, TypeError):
+                pass
             # Logical live-session KV capacity, not GPU residency or parked history.
             item["kv_cache_tokens"] = context * profile["slots"]
             try:
@@ -54,10 +63,12 @@ def catalog(profiles, store):
                 pass
         else:
             args = profile.get("args") or []
+            item["supports_vision"] = "--vision" in args
             item["kv_cache_tokens"] = option(args, "--kv-capacity")
             limit = option(args, "--default-max-tokens")
             if limit:
                 item["default_max_output_tokens"] = min(limit, ceiling)
+        item["input_modalities"] = ["text", "image"] if item["supports_vision"] else ["text"]
         result[key] = item
     return result
 
