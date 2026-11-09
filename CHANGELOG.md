@@ -1,5 +1,11 @@
 # Changes
 
+## Next
+
+- Route native Anthropic Messages and token-counting endpoints through Valet's existing profile loader and shared request queue.
+- Accept Anthropic API-key authentication; retain protocol headers, streaming tool/thinking events, profile aliases, retry information and Anthropic error envelopes.
+- Document Claude Code setup without changing model tuning or backend lifecycle rules.
+
 ## 0.4.1
 
 - Advertise configured vision support and image input modalities in model discovery without loading models.

@@ -38,7 +38,7 @@ Automatic game detection, model loading and idle restore for Strata and NInfer-f
 - **Memory activity:** VRAM read/write busy time; capacity: GiB meter.
 - **Active avg:** whole-GPU power sampled during verified backend work; resets when Valet restarts.
 
-Use the [Valet provider endpoint](docs/BACKENDS.md#valet-provider) for dynamic model loading and context/KV budget metadata in compatible agent clients.
+Use the [Valet provider endpoint](docs/BACKENDS.md#valet-provider) for dynamic model loading and context/KV budget metadata in compatible agent clients. Both OpenAI clients and [Claude Code / Anthropic Messages clients](docs/BACKENDS.md#claude-code--anthropic-messages) can use the same configured profiles.
 
 ## Run
 
