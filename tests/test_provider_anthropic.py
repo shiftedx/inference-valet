@@ -25,6 +25,8 @@ class NativeBackend(BaseHTTPRequestHandler):
         self.server.requests.append((self.path, dict(self.headers), body))
         if self.path.endswith('/count_tokens'):
             response = {'input_tokens': 12345}
+        elif self.path == '/v1/responses':
+            response = {'object': 'response', 'model': 'native', 'output': []}
         else:
             response = dict(id='msg_fixture', type='message', role='assistant', model='native',
                             content=[dict(type='tool_use', id='toolu_fixture', name='read_file', input={'path': 'a.py'})],
@@ -63,7 +65,7 @@ class AnthropicProviderTests(unittest.TestCase):
     def setUp(self):
         gc.collect()  # Destroy prior Tk test fixtures on the main thread.
         self.profiles = {k: dict(label=k, context=131072, slots=1, engine=engine, model='native')
-                         for k, engine in [('s', 'strata'), ('i', 'infernix'), ('n', 'ninfer')]}
+                         for k, engine in [('s', 'strata'), ('i', 'infernix'), ('n', 'ninfer'), ('g', 'llamacpp')]}
         self.current = 's'
         self.loader = Mock(side_effect=self.load)
         self.router = ProfileRouter(lambda _: self.current, self.loader)
@@ -116,7 +118,7 @@ class AnthropicProviderTests(unittest.TestCase):
             self.assertEqual(headers['anthropic-version'], '2023-06-01')
             self.assertEqual(headers['Authorization'], 'Bearer fixture')
             self.assertNotIn('x-api-key', headers)
-        self.assertEqual(self.loader.call_count, 2)
+        self.assertEqual(self.loader.call_count, 3)
 
     def test_token_count_and_v1_base_aliases(self):
         for profile in self.profiles:
@@ -172,10 +174,14 @@ class AnthropicProviderTests(unittest.TestCase):
         models = json.load(response)
         self.assertFalse(models['has_more'])
         self.assertEqual(models['first_id'], 's')
-        self.assertEqual(models['last_id'], 'n')
+        self.assertEqual(models['last_id'], 'g')
         self.assertEqual(models['data'][0]['display_name'], 's')
         self.assertEqual(models['data'][0]['context_length'], 131072)
         self.assertFalse(self.backend.requests)
+        response = self.open('/v1/responses', {'model': 'g', 'input': 'hello'})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.load(response)['model'], 'g')
+        self.assertEqual(self.backend.requests[-1][0], '/v1/responses')
 
     def test_backend_errors_and_retry_headers_are_preserved(self):
         self.backend.fail = True

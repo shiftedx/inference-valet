@@ -144,6 +144,9 @@ class Collector:
        previous=self.ninfer_sample
        metrics,status=adapt_ninfer_stats(stats,previous[1] if previous and previous[0]==identity else None)
        self.ninfer_sample=(identity,stats)
+      elif listener.name().lower()=='llama-server.exe':
+       from ai_llamacpp import telemetry
+       metrics,status=telemetry(self.fetch('/props'),self.fetch('/slots'))
       else:metrics,status=adapt_infernix(self.fetch('/metrics?format=json'))
      except (OSError,ValueError):pass
     else:
@@ -193,9 +196,9 @@ class Collector:
   activity=build_activity(status,metrics,demand,out['hardware'],gpu_reading,
                          {p.pid for p,k in processes},verified=verified,health=health,
                          options={**DEFAULTS,**CONFIG.get('on_demand',{})})
-  activity['engine']=('ninfer' if listener.name().lower()=='ninfer-serve.exe' else 'infernix') if native else 'strata' if verified else None
+  activity['engine']=({'ninfer-serve.exe':'ninfer','llama-server.exe':'llamacpp'}.get(listener.name().lower(),'infernix')) if native else 'strata' if verified else None
   if native and verified:
-   activity['detail']=activity['detail'].replace('Strata','NInferEZ' if activity['engine']=='ninfer' else 'Infernix')
+   activity['detail']=activity['detail'].replace('Strata',{'ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(activity['engine'],'Infernix'))
   activity['comfy']=read_comfy(CONFIG.get('activity',{}).get('comfyui_url'))
   comfy=activity['comfy']
   # Queue activity alone does not prove GPU use or grant admission priority.
@@ -663,7 +666,7 @@ class PerformancePanel:
   self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
 
  def set_activity_status(self,title,detail,state,engine='strata'):
-  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ'}.get(engine)
+  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(engine)
   self.activity_title.set((backend+' · ' if backend else '')+title);self.activity_note.set(detail)
   self.status_dot.configure(fg=THEME['success'] if state in ('ready','reading','generating') else THEME['warning'] if state in ('blocked','stale','error') else THEME['muted'])
   self.activity_title_label.configure(fg=THEME['error'] if state=='error' else THEME['warning'] if state in ('unavailable','stale','blocked') else THEME['text'])

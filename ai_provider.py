@@ -230,7 +230,7 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             if profile is None:
                 self.error(404, "Unknown Valet profile.", "model_not_found", "model")
                 return
-            if path == RESPONSES and profile["engine"] != "strata":
+            if path == RESPONSES and profile["engine"] not in ("strata", "llamacpp"):
                 self.error(404, "Use Chat Completions with this backend.", "unsupported_endpoint")
                 return
             try:

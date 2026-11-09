@@ -35,6 +35,20 @@
 - Preserve verified process ownership; never terminate unrelated port users.
 - Validate: `.\.venv\Scripts\python.exe ai-launcher.py --list`.
 
+## llama.cpp GGUF profiles
+
+- Install an official Windows CUDA llama.cpp runtime separately, including its matching CUDA runtime DLLs. Valet does not download, convert or quantize weights.
+- Add an entry under the existing `ninfer_profiles` config section with `engine: "llamacpp"`, an absolute `exe` pointing to `llama-server.exe`, an absolute GGUF `artifact`, `label`, `model` (the API alias), `context`, `slots`, and `auth: true`. Keep model files and host tuning in local config, outside the application repository.
+- This adapter initially advertises text input only. It uses the existing verified process ownership, game/resource admission, manual Unload, idle restore and model-switch draining controls.
+- Managed arguments bind loopback port 8080, set the alias and slot count, enable read-only slot telemetry, and disable unified KV. `context` is per slot; native `--ctx-size` is `context × slots`. Discovery reports independent slot capacities, not an inflated per-request context. The backend's live capacity must match before Valet reports Ready/loaded.
+- Optional `args` carry native settings. DFlash2 uses `--spec-type draft-dflash`, `--spec-draft-model <absolute GGUF path>`, `--spec-draft-ngl <layers>` and `--spec-draft-n-max <tokens>`. Use a build with DFlash2 support and a compatible drafter. Missing draft files fail preflight before the existing model is stopped.
+- Set `--n-predict` for the fallback output limit and `--reasoning-budget` for thinking. Both consume the request context. Cache formats, batching, draft length and sampling are native llama.cpp settings; Infernix tuning flags are not interchangeable.
+- `auth: true` writes the existing Valet token to a temporary API-key file and removes it when the child exits. The token is not put in process arguments. Native model/listener/context/authentication overrides are reserved for Valet.
+- Chat Completions, Responses, Anthropic Messages and token counting route through the same Valet provider/profile queue. Native errors and streams are preserved. Unknown queue lengths and rates remain unavailable; slot telemetry keeps counters, not prompts or generated text.
+- Reopen Valet only when it is safe to interrupt the provider. Adding files or preparing a config fragment does not activate a profile. GPU memory fit, draft acceptance, latency and quality require a separate live test after the running workload finishes.
+
+See the [native server reference](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) and the drafter publisher's instructions for build compatibility. A successful CLI/help or mock test does not establish GPU load/performance readiness.
+
 ## Read-only activity
 
 - See [Activity semantics](ACTIVITY.md); verify Strata listener identity before attribution.
@@ -53,7 +67,7 @@
 - Example: Infernix can report 131072 request context, 262144 shared KV, 6 slots, 32768 default output, and 131072 output ceiling. Four requests share the 262144 pool; six full 128K requests cannot all remain resident. Choose an actual output allowance and leave headroom when dividing the pool among active agents.
 - `loaded` is a live, verified resident-profile snapshot. An unloaded lazy Strata listener, unavailable health, or a mismatched native launch reports `false`. Discovery is read-only and never triggers a load. List and single-model endpoints return the same metadata.
 - OpenAI defines the model discovery envelope. Context and profile fields are Valet extensions. For clients that ignore them, enter the advertised context limit in the client settings.
-- Send the requested profile ID to `POST /v1/chat/completions` or Strata's `POST /v1/responses`. Valet loads an inactive profile, waits for readiness, then forwards the request. Allow up to 620 seconds for loading or waiting behind another model's requests.
+- Send the requested profile ID to `POST /v1/chat/completions` or Strata/llama.cpp `POST /v1/responses`. Valet loads an inactive profile, waits for readiness, then forwards the request. Allow up to 620 seconds for loading or waiting behind another model's requests.
 - Same-profile requests run concurrently. Model switches wait for existing Valet requests and streams to finish; local and LAN endpoints share the queue. Manual Unload still cancels startup.
 - Backend model IDs are accepted when active or unambiguous. Use a profile ID to select context/slot variants. Unknown IDs and unsupported endpoints never trigger a load. Load failures return `503 model_load_failed`; queue timeouts return `503 model_wait_timeout`. A running Strata listener can still warm on demand under its existing guards.
 

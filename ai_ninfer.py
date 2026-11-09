@@ -1,4 +1,4 @@
-"""Local NInfer-family profiles and memory-guarded native server ownership."""
+"""Local native profiles and memory-guarded server ownership."""
 import json
 import os
 import pathlib
@@ -27,7 +27,8 @@ def descriptors(python):
         if not engine.is_absolute() or not model_file.is_absolute():
             raise ValueError("NInfer profiles require absolute executable and artifact paths")
         backend = entry.get("engine", "ninfer")
-        if backend not in ("ninfer", "infernix") or engine.name.lower() != backend + "-serve.exe":
+        expected = {"ninfer": "ninfer-serve.exe", "infernix": "infernix-serve.exe", "llamacpp": "llama-server.exe"}
+        if backend not in expected or engine.name.lower() != expected[backend]:
             raise ValueError("NInfer profiles require a matching native serve executable")
         if backend == "ninfer" and entry.get("auth"):
             raise ValueError("Valet token forwarding requires Infernix's TOML configuration support")
@@ -35,6 +36,11 @@ def descriptors(python):
         if type(context) is not int or context < 1 or type(slots) is not int or slots < 1:
             raise ValueError("NInfer context and slots must be positive integers")
         args = entry.get("args", [])
+        if backend == "llamacpp":
+            from ai_llamacpp import validate
+            validate(args)
+            if model_file.suffix.lower() != '.gguf':
+                raise ValueError('llama.cpp requires a GGUF artifact')
         if not isinstance(args, list) or any(not isinstance(arg, str) or
                 arg.partition("=")[0] in {"--host", "--port", "--max-context", "--max-concurrency", "--model-id", "--config"}
                 for arg in args):
@@ -54,6 +60,24 @@ def verify_assets(profile):
     for key in ("exe", "artifact"):
         if not profile[key].is_file():
             raise ValueError(f"Missing NInfer {key}: {profile[key]}")
+    if profile['engine'] == 'llamacpp':
+        # A missing draft must fail before the current model is stopped.
+        args = profile.get('args', [])
+        draft_flags = {'--spec-draft-model', '--model-draft', '-md'}
+        has_draft = False
+        draft_required = False
+        for i, arg in enumerate(args):
+            flag, equals, value = arg.partition('=')
+            if flag == '--spec-type':
+                kinds = value if equals else args[i+1] if i+1 < len(args) else ''
+                draft_required = draft_required or 'draft-dflash' in kinds.split(',')
+            if flag in draft_flags:
+                path = pathlib.Path(value if equals else args[i+1] if i+1 < len(args) else '')
+                if not path.is_absolute() or not path.is_file():
+                    raise ValueError('Missing llama.cpp draft model; use an existing absolute path')
+                has_draft = True
+        if draft_required and not has_draft:
+            raise ValueError('DFlash requires a local llama.cpp draft model')
 
 
 def owned_process():
@@ -65,7 +89,12 @@ def owned_process():
         if pathlib.Path(process.exe()).resolve() != pathlib.Path(record["exe"]).resolve():
             return None
         command = process.cmdline()
-        if len(command) < 2 or pathlib.Path(command[1]).resolve() != pathlib.Path(record["artifact"]).resolve():
+        index = 1
+        if pathlib.Path(record['exe']).name.lower() == 'llama-server.exe':
+            if len(command) < 3 or command[1] != '--model':
+                return None
+            index = 2
+        if len(command) <= index or pathlib.Path(command[index]).resolve() != pathlib.Path(record["artifact"]).resolve():
             return None
         return process, record
     except (OSError, ValueError, KeyError, psutil.Error):
@@ -96,6 +125,10 @@ def run(key):
     command = [str(profile["exe"]), str(profile["artifact"]), "--host", "127.0.0.1", "--port", "8080",
                "--max-context", str(profile["context"]), "--max-concurrency", str(profile["slots"]),
                "--model-id", profile["model"], *profile["args"]]
+    llama = profile['engine'] == 'llamacpp'
+    if llama:
+        from ai_llamacpp import command as llama_command
+        command = llama_command(profile)
     credential_file = None
     child = None
     record = None
@@ -107,8 +140,13 @@ def run(key):
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".toml",
                                              prefix="ninfer-auth-", dir=STATE_DIR, delete=False) as settings:
                 credential_file = pathlib.Path(settings.name)
-                settings.write("api-key = " + json.dumps(secret) + "\n")
-            command.extend(["--config", str(credential_file)])
+                if llama:
+                    if '\n' in secret or '\r' in secret or secret.startswith('#'):
+                        raise ValueError('Valet token cannot contain newlines or start with #')
+                    settings.write(secret + '\n')
+                else:
+                    settings.write("api-key = " + json.dumps(secret) + "\n")
+            command.extend(["--api-key-file" if llama else "--config", str(credential_file)])
         child = subprocess.Popen(command, cwd=profile["exe"].parent)
         process = psutil.Process(child.pid)
         record = dict(pid=child.pid, created=process.create_time(), profile=key,
