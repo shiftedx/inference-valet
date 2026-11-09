@@ -66,6 +66,9 @@ class LlamaCppTests(unittest.TestCase):
         self.entry['args'] = ['--spec-type', 'draft-dflash']
         with self.assertRaisesRegex(ValueError, 'draft model'):
             native.verify_assets(self.profile())
+        self.entry['args'] = ['--chat-template-file', str(self.root/'missing.jinja')]
+        with self.assertRaisesRegex(ValueError, 'chat template'):
+            native.verify_assets(self.profile())
 
     def test_model_and_executable_types_are_checked(self):
         self.entry['artifact'] = str(self.root/'model.ninfer')

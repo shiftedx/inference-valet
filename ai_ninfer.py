@@ -68,6 +68,10 @@ def verify_assets(profile):
         draft_required = False
         for i, arg in enumerate(args):
             flag, equals, value = arg.partition('=')
+            if flag == '--chat-template-file':
+                path = pathlib.Path(value if equals else args[i+1] if i+1 < len(args) else '')
+                if not path.is_absolute() or not path.is_file():
+                    raise ValueError('Missing llama.cpp chat template; use an existing absolute path')
             if flag == '--spec-type':
                 kinds = value if equals else args[i+1] if i+1 < len(args) else ''
                 draft_required = draft_required or 'draft-dflash' in kinds.split(',')

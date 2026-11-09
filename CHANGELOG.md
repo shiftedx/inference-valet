@@ -3,6 +3,7 @@
 ## Next
 
 - Support separately installed llama.cpp GGUF profiles with native DFlash2 arguments, asset preflight, authenticated ownership/lifecycle control, fixed slot context metadata and counter-only telemetry.
+- Validate optional native chat-template override files before switching away from a running model.
 - Route native Anthropic Messages and token-counting endpoints through Valet's existing profile loader and shared request queue.
 - Accept Anthropic API-key authentication; retain protocol headers, streaming tool/thinking events, profile aliases, retry information and Anthropic error envelopes.
 - Document Claude Code setup without changing model tuning or backend lifecycle rules.
