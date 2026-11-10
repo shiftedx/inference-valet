@@ -1,4 +1,4 @@
-"""OpenAI-compatible discovery and inference for Valet's configured profiles."""
+"""OpenAI and Anthropic discovery/inference for Valet's configured profiles."""
 import hmac
 import ipaddress
 import http.client
@@ -15,13 +15,22 @@ PORT = 8079
 BACKEND_PORT = 8080
 CHAT = "/v1/chat/completions"
 RESPONSES = "/v1/responses"
+MESSAGES = "/v1/messages"
+COUNT_TOKENS = MESSAGES + "/count_tokens"
 MAX_BODY = 64 * 1024 * 1024
+
+
+def endpoint(url):
+    path = urlsplit(url).path.rstrip("/")
+    # Accept the common OpenAI-style base URL mistake for Anthropic clients.
+    return {"/v1" + MESSAGES: MESSAGES,
+            "/v1" + COUNT_TOKENS: COUNT_TOKENS}.get(path, path)
 
 
 def model_info(key, profile, loaded=False):
     context = profile["context"]
     result = dict(id=key, object="model", created=0, owned_by="inference-valet",
-                  name=profile["label"], context_length=context,
+                  name=profile["label"], display_name=profile["label"], context_length=context,
                   backend=profile["engine"], backend_model=profile["model"],
                   parallel_slots=profile["slots"], loaded=bool(loaded))
     for field in ("kv_cache_tokens", "kv_shared", "kv_cache_tokens_per_slot",
@@ -37,13 +46,14 @@ def alias_response(payload, profile_id):
     if isinstance(payload, dict):
         if "model" in payload:
             payload["model"] = profile_id
-        response = payload.get("response")
-        if isinstance(response, dict) and "model" in response:
-            response["model"] = profile_id
+        for field in ("response", "message"):
+            nested = payload.get(field)
+            if isinstance(nested, dict) and "model" in nested:
+                nested["model"] = profile_id
     return payload
 
 
-def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue):
+def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue, performance=None):
     """Bind loopback or a specific LAN address and restrict LAN peers to its subnet."""
     if not key:
         raise ValueError("Set the Valet API token before starting the provider endpoint.")
@@ -58,6 +68,9 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         allowed = tuple(ipaddress.IPv4Network(value) for value in lan_clients) if lan_clients else (interface.network,)
     router = router or ProfileRouter(active_profile)
     resident_profile = loaded_profile or active_profile
+    if performance is None:
+        from ai_llamacpp_metrics import observe_owned
+        performance = observe_owned
     bearer = "Bearer " + key
     authorization = bearer.encode("utf-8")
 
@@ -68,6 +81,10 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         def setup(self):
             super().setup()
             self.connection.settimeout(30)
+            self.request_id = uuid.uuid4().hex
+
+        def anthropic(self):
+            return endpoint(self.path) in (MESSAGES, COUNT_TOKENS) or bool(self.headers.get("anthropic-version"))
 
         def send_json(self, status, payload):
             data = json.dumps(payload).encode("utf-8")
@@ -80,6 +97,13 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             self.wfile.write(data)
 
         def error(self, status, message, code, param=None):
+            if self.anthropic():
+                kind = {401: "authentication_error", 403: "permission_error",
+                        404: "not_found_error", 413: "request_too_large",
+                        502: "api_error", 503: "api_error"}.get(status, "invalid_request_error")
+                self.send_json(status, dict(type="error", error=dict(type=kind, message=message),
+                                            request_id=self.request_id))
+                return
             kind = {401: "authentication_error", 502: "server_error", 503: "server_error"}.get(
                 status, "invalid_request_error")
             self.send_json(status, {"error": dict(message=message, type=kind, code=code, param=param)})
@@ -89,7 +113,8 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                 self.error(403, "This provider is restricted to the configured LAN subnets.", "access_denied")
                 return False
             value = self.headers.get("Authorization", "").encode("utf-8")
-            if hmac.compare_digest(value, authorization):
+            api_key = self.headers.get("x-api-key", "").encode("utf-8")
+            if hmac.compare_digest(value, authorization) or hmac.compare_digest(api_key, key.encode("utf-8")):
                 return True
             self.error(401, "A valid Valet API token is required.", "invalid_api_key")
             return False
@@ -97,12 +122,14 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         def do_GET(self):
             if not self.authorized():
                 return
-            path = urlsplit(self.path).path.rstrip("/")
+            path = endpoint(self.path)
             catalog = profiles()
             if path == "/v1/models":
                 loaded = resident_profile(catalog)
                 self.send_json(200, dict(object="list", data=[
-                    model_info(k, p, loaded=k == loaded) for k, p in catalog.items()]))
+                    model_info(k, p, loaded=k == loaded) for k, p in catalog.items()],
+                    has_more=False, first_id=next(iter(catalog), None),
+                    last_id=next(reversed(catalog), None)))
                 return
             if path.startswith("/v1/models/"):
                 key = unquote(path.removeprefix("/v1/models/"))
@@ -133,11 +160,10 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         def do_POST(self):
             if not self.authorized():
                 return
-            path = urlsplit(self.path).path.rstrip("/")
-            if path not in (CHAT, RESPONSES):
+            path = endpoint(self.path)
+            if path not in (CHAT, RESPONSES, MESSAGES, COUNT_TOKENS):
                 self.error(404, "Unknown provider endpoint.", "not_found")
                 return
-            self.request_id = uuid.uuid4().hex
             self.body_declared = None
             self.body_received = 0
             self.body_started = time.monotonic()
@@ -207,35 +233,57 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             if profile is None:
                 self.error(404, "Unknown Valet profile.", "model_not_found", "model")
                 return
-            if path == RESPONSES and profile["engine"] != "strata":
+            if path == RESPONSES and profile["engine"] not in ("strata", "llamacpp"):
                 self.error(404, "Use Chat Completions with this backend.", "unsupported_endpoint")
                 return
             try:
+                admitted = time.monotonic()
                 with router.use(profile_key, catalog):
                     payload["model"] = profile["model"]
-                    self.forward(path, payload, key)
+                    observer = None
+                    if profile['engine'] == 'llamacpp' and path != COUNT_TOKENS:
+                        try:
+                            observer = performance(admitted)
+                        except Exception:
+                            pass  # Telemetry never changes request routing or availability.
+                    self.forward(path, payload, key, observer)
             except ProfileUnavailable as exc:
                 self.error(503, str(exc), exc.code, "model")
 
-        def forward(self, path, payload, key):
+        def forward(self, path, payload, key, observer=None):
             conn = http.client.HTTPConnection("127.0.0.1", backend_port, timeout=620)
             started = False
+            status, failed = 502, False
+            def observe(method, *args):
+                if observer is not None:
+                    try:
+                        getattr(observer, method)(*args)
+                    except Exception:
+                        pass
             try:
-                conn.request("POST", path, body=json.dumps(payload).encode("utf-8"),
-                             headers={"Content-Type": "application/json",
-                                      "Authorization": bearer})
+                headers = {"Content-Type": "application/json", "Authorization": bearer}
+                # Native backends implement Messages, including tools, images and thinking.
+                # Keep protocol hints intact; never forward client credentials or hop headers.
+                for name in ("anthropic-version", "anthropic-beta"):
+                    if values := self.headers.get_all(name):
+                        headers[name] = ",".join(values)
+                conn.request("POST", path, body=json.dumps(payload).encode("utf-8"), headers=headers)
                 response = conn.getresponse()
+                status = response.status
                 content_type = response.getheader("Content-Type", "application/json")
                 if content_type.startswith("text/event-stream"):
                     started = True
                     self.send_response(response.status)
                     self.send_header("Content-Type", content_type)
                     self.send_header("Cache-Control", "no-cache")
+                    self.response_headers(response)
                     self.end_headers()
                     for line in response:
                         if line.startswith(b"data:") and line.strip() != b"data: [DONE]":
                             try:
-                                event = alias_response(json.loads(line[5:]), key)
+                                event = json.loads(line[5:])
+                                observe('event', event)
+                                event = alias_response(event, key)
                                 line = b"data: " + json.dumps(event).encode("utf-8") + b"\n"
                             except ValueError:
                                 pass
@@ -244,19 +292,28 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                     return
                 data = response.read()
                 if content_type.startswith("application/json") and response.status < 400:
-                    data = json.dumps(alias_response(json.loads(data), key)).encode("utf-8")
+                    event = json.loads(data)
+                    observe('event', event, False)
+                    data = json.dumps(alias_response(event, key)).encode("utf-8")
                 started = True
                 self.send_response(response.status)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(data)))
-                if retry := response.getheader("Retry-After"):
-                    self.send_header("Retry-After", retry)
+                self.response_headers(response)
                 self.end_headers()
                 self.wfile.write(data)
             except (OSError, http.client.HTTPException, ValueError):
+                failed = True
                 if not started:
                     self.error(502, "The Valet backend could not answer the request.", "backend_unavailable")
             finally:
                 conn.close()
+                observe('finish', status, failed)
+
+        def response_headers(self, response):
+            self.send_header("X-Request-ID", self.request_id)
+            for name, value in response.getheaders():
+                if name.lower() in ("request-id", "retry-after", "retry-after-ms", "x-should-retry") or name.lower().startswith("anthropic-ratelimit-"):
+                    self.send_header(name, value)
 
     return ThreadingHTTPServer((str(interface.ip) if interface else "127.0.0.1", port), Handler)

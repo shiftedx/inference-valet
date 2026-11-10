@@ -120,6 +120,8 @@ class Collector:
   self.gpu_reading={};self.gpu_checked=float('-inf')
   self.runtime_details=RuntimeDetailsReader(STRATA_ROOT)
   self.ninfer_sample=None
+  from ai_llamacpp_metrics import History,SlotRates
+  self.llama_history=History();self.llama_rates=SlotRates()
  def collect(self):return self._collect(True)
  def summary(self):return self._collect(False)
  def _collect(self,detailed):
@@ -144,6 +146,11 @@ class Collector:
        previous=self.ninfer_sample
        metrics,status=adapt_ninfer_stats(stats,previous[1] if previous and previous[0]==identity else None)
        self.ninfer_sample=(identity,stats)
+      elif listener.name().lower()=='llama-server.exe':
+       from ai_llamacpp import telemetry
+       props=self.fetch('/props');slots=self.fetch('/slots')
+       rates=self.llama_rates.sample(identity,slots,sampled)
+       metrics,status=telemetry(props,slots,rates,self.llama_history.read((listener.pid,listener.create_time())))
       else:metrics,status=adapt_infernix(self.fetch('/metrics?format=json'))
      except (OSError,ValueError):pass
     else:
@@ -193,9 +200,9 @@ class Collector:
   activity=build_activity(status,metrics,demand,out['hardware'],gpu_reading,
                          {p.pid for p,k in processes},verified=verified,health=health,
                          options={**DEFAULTS,**CONFIG.get('on_demand',{})})
-  activity['engine']=('ninfer' if listener.name().lower()=='ninfer-serve.exe' else 'infernix') if native else 'strata' if verified else None
+  activity['engine']=({'ninfer-serve.exe':'ninfer','llama-server.exe':'llamacpp'}.get(listener.name().lower(),'infernix')) if native else 'strata' if verified else None
   if native and verified:
-   activity['detail']=activity['detail'].replace('Strata','NInferEZ' if activity['engine']=='ninfer' else 'Infernix')
+   activity['detail']=activity['detail'].replace('Strata',{'ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(activity['engine'],'Infernix'))
   activity['comfy']=read_comfy(CONFIG.get('activity',{}).get('comfyui_url'))
   comfy=activity['comfy']
   # Queue activity alone does not prove GPU use or grant admission priority.
@@ -478,7 +485,9 @@ class PerformancePanel:
   self.technical_body=tk.Frame(self.detail_tabs['Requests'],bg=THEME['bg']);self.technical_body.pack(fill='x',pady=(0,8))
   self._detail_pairs(self.technical_body,(('Prompt read','prompt_read'),('Output tokens','generated'),('Prefix reuse','reuse'),('Draft acceptance','draft'),('Expert cache hits','expert'),('PCIe transfer','pcie')))
   self._label(self.detail_tabs['Requests'],'Recent requests','caption',bold=True).pack(anchor='w',pady=(0,5))
-  self.request_table=self._table(self.detail_tabs['Requests'],(('time','Time',95),('outcome','Outcome',180),('tokens','Tokens',95),('duration','Duration',100)),5)
+  self.request_table=self._table(self.detail_tabs['Requests'],(('time','Time',85),('outcome','Outcome',155),('tokens','Tokens',75),('duration','Duration',80),('prefill','Prefill tok/s',100),('decode','Decode tok/s',100),('ttft','TTFT ms',85),('reuse','Reuse %',80),('draft','Draft %',80)),5)
+  for column in self.request_table['columns']:
+   self.request_table.column(column,minwidth=self.request_table.column(column,'width'),stretch=False)
   self.request_note=tk.StringVar(value='No completed requests reported')
   self._label(self.detail_tabs['Requests'],variable=self.request_note,size='caption',color=THEME['muted']).pack(anchor='w',pady=(6,0))
   engine_header=tk.Frame(self.detail_tabs['Engine'],bg=THEME['bg']);engine_header.pack(fill='x',pady=(0,6))
@@ -520,7 +529,7 @@ class PerformancePanel:
   holder=tk.Frame(parent,bg=THEME['bg']);holder.pack(fill='x')
   table=ttk.Treeview(holder,columns=[key for key,_,_ in columns],show='headings',height=height,style='Valet.Treeview',selectmode='browse',takefocus=True)
   for key,title,width in columns:
-   alignment='e' if key in ('tokens','duration','pid','memory') else 'center' if key=='time' else 'w'
+   alignment='e' if key in ('tokens','duration','pid','memory','prefill','decode','ttft','reuse','draft') else 'center' if key=='time' else 'w'
    table.heading(key,text=title,anchor=alignment);table.column(key,width=round(width*self.scale),minwidth=round(45*self.scale),anchor=alignment,stretch=True)
   table.pack(fill='x',expand=True)
   self.detail_tables.append(table)
@@ -663,7 +672,7 @@ class PerformancePanel:
   self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
 
  def set_activity_status(self,title,detail,state,engine='strata'):
-  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ'}.get(engine)
+  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(engine)
   self.activity_title.set((backend+' · ' if backend else '')+title);self.activity_note.set(detail)
   self.status_dot.configure(fg=THEME['success'] if state in ('ready','reading','generating') else THEME['warning'] if state in ('blocked','stale','error') else THEME['muted'])
   self.activity_title_label.configure(fg=THEME['error'] if state=='error' else THEME['warning'] if state in ('unavailable','stale','blocked') else THEME['text'])
@@ -722,9 +731,11 @@ class PerformancePanel:
    finish={'stop':'Completed','complete':'Completed','completed':'Completed','eos':'Completed',
            'length':'Token limit reached','cancel':'Cancelled','cancelled':'Cancelled','canceled':'Cancelled',
            'error':'Failed','failed':'Failed'}.get(row.get('finish'),'Finished')
-   recent.append((when,finish,fmt(row.get('tokens'),digits=0),fmt(row.get('duration_s'),' s')))
+   recent.append((when,finish,fmt(row.get('tokens'),digits=0),fmt(row.get('duration_s'),' s'),
+                  fmt(row.get('prefill_tok_s'),digits=0),fmt(row.get('decode_tok_s')),
+                  fmt(row.get('ttft_ms'),digits=0),fmt(row.get('reuse_percent')),fmt(row.get('draft_percent'))))
   self._replace_rows(self.request_table,recent)
-  self.request_note.set('Backend timings · prompts are not stored' if recent else 'No completed requests reported · prompts are not stored')
+  self.request_note.set('Backend timings · Shift+wheel for more columns · prompts are not stored' if recent else 'No completed requests reported · prompts are not stored')
   self.activity_details.set('\n'.join(' · '.join(row) for row in recent))
 
  def mark_stale(self):

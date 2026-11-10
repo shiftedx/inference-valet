@@ -68,6 +68,12 @@ def catalog(profiles, store):
             limit = option(args, "--default-max-tokens")
             if limit:
                 item["default_max_output_tokens"] = min(limit, ceiling)
+            if profile['engine'] == 'llamacpp':
+                # Managed llama.cpp uses separate, fixed-size slot contexts.
+                item.update(kv_shared=False, kv_cache_tokens=context * profile['slots'],
+                            kv_cache_tokens_per_slot=context, supports_vision=False)
+                limit = option(args, '--n-predict')
+                item['default_max_output_tokens'] = min(limit, ceiling) if limit else None
         item["input_modalities"] = ["text", "image"] if item["supports_vision"] else ["text"]
         result[key] = item
     return result
@@ -119,18 +125,25 @@ def loaded_profile(profiles, processes, listener_for, native_owner, fetch, strat
                     or pathlib.Path(profile["exe"]).resolve() != pathlib.Path(native[1]["exe"]).resolve()):
                 return None
             command = listener.cmdline()
-            tail = command[command.index("--model-id") + 2:]
-            if len(tail) >= 2 and tail[-2] == "--config":
-                tail = tail[:-2]  # Auth-only file created by the native wrapper.
-            if tail != profile.get("args", []):
-                return None
+            if profile['engine'] == 'llamacpp':
+                from ai_llamacpp import matching_command, ready
+                if not matching_command(command, profile) or not ready(profile, fetch):
+                    return None
+                engine = dict(max_context=profile['context'], max_concurrency=profile['slots'])
+                matching_schema = True
+            else:
+                tail = command[command.index("--model-id") + 2:]
+                if len(tail) >= 2 and tail[-2] == "--config":
+                    tail = tail[:-2]  # Auth-only file created by the native wrapper.
+                if tail != profile.get("args", []):
+                    return None
             if profile["engine"] == "ninfer":
                 stats = fetch("/stats")
                 engine = stats.get("capacity") or {}
                 models = fetch("/v1/models")
                 matching_model = any(row.get("id") == profile["model"] for row in models.get("data", []))
                 matching_schema = stats.get("object") == "ninfer.stats" and matching_model
-            else:
+            elif profile['engine'] != 'llamacpp':
                 metrics = fetch("/metrics?format=json")
                 engine = metrics.get("engine") or {}
                 matching_schema = (metrics.get("schema") == "infernix.telemetry/1"

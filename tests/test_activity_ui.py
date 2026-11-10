@@ -19,6 +19,25 @@ class ActivityPanelTests(unittest.TestCase):
     def tearDown(self):
         self.root.destroy()
 
+    def test_numeric_request_metrics_remain_accessible_at_each_scale(self):
+        for scale in (1,1.5,2):
+            with self.subTest(scale=scale):
+                self.root.tk.call('tk','scaling',(96/72)*scale)
+                self.root.geometry(f'760x{round(1500*scale)}')
+                panel=PerformancePanel(self.root)
+                panel.pack(fill='both',expand=True)
+                panel.update({'activity':{'state':'ready','engine':'llamacpp','title':'Ready','recent':[
+                    dict(time=1700000000,finish='stop',tokens=40,duration_s=2,prefill_tok_s=2000,
+                         decode_tok_s=200,ttft_ms=250,reuse_percent=90,draft_percent=80)]}})
+                panel.toggle_details();panel.details_notebook.select(panel.detail_tabs['Requests'])
+                self.root.update()
+                row=panel.request_table.item(panel.request_table.get_children()[0],'values')
+                self.assertEqual(row[4:],('2,000','200.0','250','90.0','80.0'))
+                self.assertTrue(panel.request_table.winfo_ismapped())
+                panel.request_table.xview_moveto(1);self.root.update()
+                self.assertEqual(panel.request_table.xview()[1],1)
+                panel.frame.destroy()
+
     def test_activity_visible_and_request_history_excludes_payloads(self):
         panel = PerformancePanel(self.root)
         panel.pack(fill='both', expand=True)
@@ -42,7 +61,8 @@ class ActivityPanelTests(unittest.TestCase):
         self.root.update()
         self.assertTrue(panel.request_table.winfo_ismapped())
         values = [panel.request_table.item(item, 'values') for item in panel.request_table.get_children()]
-        self.assertEqual(values[0][1:], ('Completed', '42', '2.0 s'))
+        self.assertEqual(values[0][1:4], ('Completed', '42', '2.0 s'))
+        self.assertEqual(values[0][4:], ('—',)*5)
         self.assertIn('game.exe', panel.blocker_summary.get())
         self.assertIn('1 running', panel.comfy_summary.get())
         self.assertFalse(panel.process_table.winfo_ismapped())

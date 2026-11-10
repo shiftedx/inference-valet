@@ -48,6 +48,27 @@ class ActivityCollectorTests(unittest.TestCase):
         self.assertEqual(result['activity']['state'], 'unavailable')
         self.assertEqual(result['activity']['recent'], [])
 
+    def test_llamacpp_history_and_live_counter_deltas_reach_collector(self):
+        self.processes=[(self.listener,'ninfer-server')]
+        self.listener.name.return_value='llama-server.exe'
+        props={'default_generation_settings':{'n_ctx':262144},'total_slots':1}
+        slot=dict(id=0,id_task=1,is_processing=True,n_prompt_tokens=1040,
+                  n_prompt_tokens_processed=100,n_prompt_tokens_cache=900,next_token=[{'n_decoded':40}])
+        self.fetch.side_effect=lambda path:{'/health':{'status':'ok'},'/props':props,'/slots':[slot]}[path]
+        self.collector.llama_history=Mock()
+        self.collector.llama_history.read.return_value=[dict(time=1700000000,prefill_tok_s=2000,decode_tok_s=200,
+                prompt_tokens=1000,reused=900,drafts_offered=100,drafts_accepted=80,ttft_ms=250,output_tokens=40)]
+        with patch.object(telemetry.time,'monotonic',return_value=1):first=self.collector.summary()
+        self.assertIsNone(first['live_speed'])
+        slot['next_token'][0]['n_decoded']=440
+        with patch.object(telemetry.time,'monotonic',return_value=3):second=self.collector.summary()
+        self.assertEqual(second['live_speed'],200)
+        self.assertEqual(second['activity']['engine'],'llamacpp')
+        self.assertEqual(second['activity']['recent'][0]['draft_percent'],80)
+        self.assertEqual((second['last_speed'],second['last_prefill'],second['ttft_ms']),(200,2000,250))
+        self.collector.llama_history.read.assert_called_with((123,100.0))
+        self.assertEqual({call.args[0] for call in self.fetch.call_args_list},{'/health','/props','/slots'})
+
     def test_listener_vanishes_during_sample_discards_native_results(self):
         self.listener.net_connections.side_effect = [[self.connection], []]
         result = self.collector.collect()

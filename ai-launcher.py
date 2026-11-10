@@ -239,6 +239,9 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
     if cfg['engine']!='strata':
      owned=ai_ninfer.owned_process()
      if not owned or owned[1]['profile']!=key or strata_listener([(owned[0],'ninfer-server')]) is None:raise ValueError('Still loading')
+     if cfg['engine']=='llamacpp':
+      from ai_llamacpp import ready
+      if not ready(cfg,fetch):raise ValueError('Still loading')
      IDLE_SETTINGS.update(last_profile=key,demand_armed=False)
     report('Ready: '+cfg['label']+' — http://127.0.0.1:8080');return dict(profile=key,model=cfg['model'],log=str(log))
   except (OSError,ValueError,KeyError):pass
