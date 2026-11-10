@@ -53,7 +53,7 @@ def alias_response(payload, profile_id):
     return payload
 
 
-def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue):
+def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue, performance=None):
     """Bind loopback or a specific LAN address and restrict LAN peers to its subnet."""
     if not key:
         raise ValueError("Set the Valet API token before starting the provider endpoint.")
@@ -68,6 +68,9 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         allowed = tuple(ipaddress.IPv4Network(value) for value in lan_clients) if lan_clients else (interface.network,)
     router = router or ProfileRouter(active_profile)
     resident_profile = loaded_profile or active_profile
+    if performance is None:
+        from ai_llamacpp_metrics import observe_owned
+        performance = observe_owned
     bearer = "Bearer " + key
     authorization = bearer.encode("utf-8")
 
@@ -234,15 +237,29 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                 self.error(404, "Use Chat Completions with this backend.", "unsupported_endpoint")
                 return
             try:
+                admitted = time.monotonic()
                 with router.use(profile_key, catalog):
                     payload["model"] = profile["model"]
-                    self.forward(path, payload, key)
+                    observer = None
+                    if profile['engine'] == 'llamacpp' and path != COUNT_TOKENS:
+                        try:
+                            observer = performance(admitted)
+                        except Exception:
+                            pass  # Telemetry never changes request routing or availability.
+                    self.forward(path, payload, key, observer)
             except ProfileUnavailable as exc:
                 self.error(503, str(exc), exc.code, "model")
 
-        def forward(self, path, payload, key):
+        def forward(self, path, payload, key, observer=None):
             conn = http.client.HTTPConnection("127.0.0.1", backend_port, timeout=620)
             started = False
+            status, failed = 502, False
+            def observe(method, *args):
+                if observer is not None:
+                    try:
+                        getattr(observer, method)(*args)
+                    except Exception:
+                        pass
             try:
                 headers = {"Content-Type": "application/json", "Authorization": bearer}
                 # Native backends implement Messages, including tools, images and thinking.
@@ -252,6 +269,7 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                         headers[name] = ",".join(values)
                 conn.request("POST", path, body=json.dumps(payload).encode("utf-8"), headers=headers)
                 response = conn.getresponse()
+                status = response.status
                 content_type = response.getheader("Content-Type", "application/json")
                 if content_type.startswith("text/event-stream"):
                     started = True
@@ -263,7 +281,9 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                     for line in response:
                         if line.startswith(b"data:") and line.strip() != b"data: [DONE]":
                             try:
-                                event = alias_response(json.loads(line[5:]), key)
+                                event = json.loads(line[5:])
+                                observe('event', event)
+                                event = alias_response(event, key)
                                 line = b"data: " + json.dumps(event).encode("utf-8") + b"\n"
                             except ValueError:
                                 pass
@@ -272,7 +292,9 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                     return
                 data = response.read()
                 if content_type.startswith("application/json") and response.status < 400:
-                    data = json.dumps(alias_response(json.loads(data), key)).encode("utf-8")
+                    event = json.loads(data)
+                    observe('event', event, False)
+                    data = json.dumps(alias_response(event, key)).encode("utf-8")
                 started = True
                 self.send_response(response.status)
                 self.send_header("Content-Type", content_type)
@@ -281,10 +303,12 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
                 self.end_headers()
                 self.wfile.write(data)
             except (OSError, http.client.HTTPException, ValueError):
+                failed = True
                 if not started:
                     self.error(502, "The Valet backend could not answer the request.", "backend_unavailable")
             finally:
                 conn.close()
+                observe('finish', status, failed)
 
         def response_headers(self, response):
             self.send_header("X-Request-ID", self.request_id)

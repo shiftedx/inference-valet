@@ -131,8 +131,15 @@ def build_activity(status, metrics, demand, hardware, processes, owned,
                 prompt_ms, decode_ms = _number(row.get('prompt_ms')), _number(row.get('decode_ms'))
                 if prompt_ms is not None and decode_ms is not None:
                     duration = (prompt_ms + decode_ms) / 1000
+        prompt, reused = _number(row.get('prompt_tokens')), _number(row.get('reused'))
+        offered, accepted = _number(row.get('drafts_offered')), _number(row.get('drafts_accepted'))
+        performance=dict(prefill_tok_s=_number(row.get('prefill_tok_s')), decode_tok_s=_number(row.get('decode_tok_s')),
+                           ttft_ms=_number(row.get('ttft_ms')),
+                           reuse_percent=100*reused/prompt if prompt and reused is not None and reused<=prompt else None,
+                           draft_percent=100*accepted/offered if offered and accepted is not None and accepted<=offered else None)
         recent.append(dict(time=_number(row.get('time')), finish=finish,
-                           tokens=_count(row.get('output_tokens', row.get('generated'))), duration_s=duration))
+                           tokens=_count(row.get('output_tokens', row.get('generated'))), duration_s=duration,
+                           **{k:v for k,v in performance.items() if v is not None}))
     blockers = []
     if demand.get('games'):
         blockers.append('Gaming priority is active')

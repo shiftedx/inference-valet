@@ -138,7 +138,7 @@ class LlamaCppTests(unittest.TestCase):
         self.assertEqual(metrics['live']['state'], 'generating')
         self.assertEqual(metrics['live']['running'], 1)
         self.assertIsNone(metrics['live']['queued'])
-        self.assertNotIn('tok_s', metrics['live'])
+        self.assertIsNone(metrics['live'].get('tok_s'))
         self.assertNotIn('PRIVATE', json.dumps([metrics,status]))
         slot.update(n_prompt_tokens_processed=1000, n_prompt_tokens_cache=0, next_token=[])
         self.assertEqual(llama.telemetry(props,[slot])[0]['live']['state'], 'reading')
