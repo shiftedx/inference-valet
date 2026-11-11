@@ -183,6 +183,15 @@ class ProfileRouter:
         self.inflight = 0
         self.profile = None
 
+    def snapshot(self):
+        """Read admitted and waiting inference counts without entering admission."""
+        if not self.condition.acquire(False):
+            return {'available': False, 'in_flight': None, 'queued': None}
+        try:
+            return {'available': True, 'in_flight': self.inflight, 'queued': len(self.queue)}
+        finally:
+            self.condition.release()
+
     @contextlib.contextmanager
     def use(self, key, profiles):
         ticket = object()

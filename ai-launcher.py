@@ -1139,23 +1139,34 @@ def provider_router(events=None):
   return result
  return ProfileRouter(active,load)
 
-def provider_server(router=None,**bind):
+def provider_metrics(router):
+ from ai_metrics import MetricsExporter
+ from ai_provider_runtime import catalog
+ collector=Collector(fetch,servers,read_demand_status)
+ def profile():
+  profiles=catalog(PROFILES,PROFILE_STORE);key=router.active(profiles)
+  return key,profiles.get(key,{})
+ return MetricsExporter(collector.collect,profile)
+
+def provider_server(router=None,telemetry=None,**bind):
  from ai_provider import make_server
  from ai_provider_runtime import catalog,loaded_profile
  router=router or provider_router()
  def resident(profiles):return loaded_profile(profiles,servers,strata_listener,ai_ninfer.owned_process,fetch,STRATA)
- return make_server(strata_api_key(),lambda:catalog(PROFILES,PROFILE_STORE),router.active,router=router,loaded_profile=resident,**bind)
+ telemetry=telemetry if telemetry is not None else provider_metrics(router)
+ return make_server(strata_api_key(),lambda:catalog(PROFILES,PROFILE_STORE),router.active,router=router,loaded_profile=resident,telemetry=telemetry,**bind)
 
 @contextlib.contextmanager
 def running_providers(events=None):
  router=provider_router(events)
+ telemetry=provider_metrics(router)
  with contextlib.ExitStack() as stack:
   bindings=[{}]
   if lan:=CONFIG.get('provider_lan'):bindings.append(dict(lan=lan,port=8080,lan_clients=CONFIG.get('provider_lan_clients')))
   providers=[]
   for bind in bindings:
    try:
-    provider=stack.enter_context(provider_server(router=router,**bind))
+    provider=stack.enter_context(provider_server(router=router,telemetry=telemetry,**bind))
    except (OSError,ValueError) as exc:
     record_issue('provider_unavailable',f'Valet provider listener failed: {exc}')
     continue

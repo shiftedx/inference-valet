@@ -74,6 +74,40 @@ See the [native server reference](https://github.com/ggml-org/llama.cpp/tree/mas
 - Same-profile requests run concurrently. Model switches wait for existing Valet requests and streams to finish; local and LAN endpoints share the queue. Manual Unload still cancels startup.
 - Backend model IDs are accepted when active or unambiguous. Use a profile ID to select context/slot variants. Unknown IDs and unsupported endpoints never trigger a load. Load failures return `503 model_load_failed`; queue timeouts return `503 model_wait_timeout`. A running Strata listener can still warm on demand under its existing guards.
 
+### Dashboard metrics
+
+| GET | Format |
+|---|---|
+| `/metrics` | Prometheus text 0.0.4, `valet_` gauges, base units |
+| `/v1/metrics` | JSON, schema `inference-valet.metrics/1` |
+
+- Use the provider root (`http://127.0.0.1:8079` or the configured LAN listener), the existing bearer token or `x-api-key`, and the existing LAN allowlist.
+- Read only; never loads or switches models. One cached collector shared by both listeners/formats; refreshes at most once per two seconds. Scrape every 10–15 seconds.
+- Exposes profile/context/shared-KV capacity/output limits, GPU/CPU/RAM/power, live and last prefill/decode rates, TTFT, prefix reuse, draft acceptance, backend/provider request counts, slot context use, and up to 12 numeric-only recent requests in JSON.
+- Provider admitted/queued counts and backend running/queued counts are separate. Configured KV capacity is not current GPU residency or free KV space.
+- Unknown JSON values are `null`; unavailable Prometheus samples are omitted. `available`, `stale`, `age_seconds` and `sampled_at` identify freshness. Failed collection retains the last snapshot marked stale with `collection_failed`, without exception text.
+- No prompts, completions, images, tool arguments, credentials, client identifiers, process identifiers, paths or raw backend responses. Request history is not exported as Prometheus labels or cumulative counters.
+- Data availability follows the backend; llama.cpp queue depth and unsupported cache counters remain unknown. A cached snapshot is not a benchmark or quality check.
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:VALET_API_KEY" }
+Invoke-RestMethod http://127.0.0.1:8079/v1/metrics -Headers $headers
+```
+
+```yaml
+scrape_configs:
+  - job_name: inference-valet
+    scrape_interval: 15s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/valet_api_token
+    static_configs:
+      - targets: ['valet-host:8080'] # Configured Valet LAN listener
+```
+
+Example series: `valet_performance_decode_tokens_per_second`, `valet_performance_last_ttft_seconds`, `valet_performance_draft_acceptance_ratio`, `valet_hardware_gpu_memory_used_bytes`, `valet_provider_in_flight`, `valet_telemetry_up`.
+
 ### Claude Code / Anthropic Messages
 
 Valet also routes `POST /v1/messages` and `POST /v1/messages/count_tokens` to the selected backend's native Anthropic API. Use a Strata or NInfer-family runtime that implements these endpoints; Valet does not translate Messages into Chat Completions. The same admission, profile loading, request queue and stream-draining rules apply. Token counting can load an inactive profile so the backend can count its rendered prompt accurately.
