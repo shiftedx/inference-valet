@@ -59,6 +59,7 @@ class DisplayScalingTests(unittest.TestCase):
         collector = app.collector; policy = app.idle_policy; root = app.window
         app.events.put(('status', 'Load remains in progress'))
         original_height = app.picker.winfo_height()
+        original_traces = len(app.selected.trace_info())
         original_font = int(root.tk.call('font', 'metrics', app.start_button.cget('font'), '-linespace'))
         with (patch.object(a, 'start_profile') as start, patch.object(a, 'stop_all') as stop,
               patch.object(a.IDLE_SETTINGS, 'update') as settings):
@@ -72,6 +73,8 @@ class DisplayScalingTests(unittest.TestCase):
                     height = int(root.tk.call('font', 'metrics', app.start_button.cget('font'), '-linespace'))
                     self.assertAlmostEqual(height, original_font*dpi/96, delta=4)
                     self.assertEqual(app.selected.get(), a.PROFILE_NAMES[app.keys[1]])
+                    self.assertEqual(app.api_access.model_id.get(),app.keys[1])
+                    self.assertEqual(len(app.selected.trace_info()),original_traces)
                     self.assertEqual(str(app.start_button.cget('state')), 'disabled')
                     self.assertIs(app.window, root)
                     self.assertIs(app.events, events)
