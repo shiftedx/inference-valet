@@ -407,6 +407,7 @@ class LauncherUI:
   self.details_geometry=None;self.next_display_check=0;self.rescaling=False
   self._logical_window_size=(760,580);self._display_work=None
   self._build_dashboard()
+  self.model_id_trace=self.selected.trace_add('write',lambda *_:self.api_access.refresh_model()) if self.performance else None
   self.window.protocol('WM_DELETE_WINDOW',self.close)
   self.window.bind('<Unmap>',lambda event:self.hide() if event.widget==self.window and self.window.state()=='iconic' else None)
   self.window.bind('<Escape>',lambda event:self.hide())
@@ -590,15 +591,16 @@ class LauncherUI:
    api_tab=tk.Frame(self.performance.details_notebook,bg=THEME['bg'],padx=round(8*self.ui_scale),pady=round(8*self.ui_scale))
    self.performance.details_notebook.add(api_tab,text='API access')
    self.performance.detail_tabs['API access']=api_tab
-   self.api_access=ApiAccessPanel(api_tab,strata_api_key);self.api_access.pack(fill='x')
+   self.api_access=ApiAccessPanel(api_tab,strata_api_key,self.selected_profile,lambda:self.current)
+   self.api_access.pack(fill='x')
    self.performance.on_layout=fit_dashboard
    self.performance.on_edit_engine=lambda:self.edit_profile(initial_page='Memory')
    self.performance.pack(fill='both',expand=True)
   self._bind_scroll_region(frame,canvas)
   if self.performance:self.performance.on_details=self.resize_details
  def selected_profile(self):
-  index=self.picker.current()
-  return self.keys[index] if 0<=index<len(self.keys) else None
+  label=self.selected.get()
+  return next((key for key in self.keys if PROFILE_NAMES.get(key)==label),None)
  def edit_profile(self,initial_page='Profile'):
   from tkinter import messagebox
   from ai_profile_editor import ProfileEditor
@@ -840,6 +842,8 @@ class LauncherUI:
   if self.active:return False
   if self.tray_context:self.tray_context.hide()
   self.closing=True
+  if self.model_id_trace:
+   self.selected.trace_remove('write',self.model_id_trace);self.model_id_trace=None
   self.telemetry_worker.shutdown(wait=False,cancel_futures=True)
   self.policy_worker.shutdown(wait=False,cancel_futures=True)
   for timer in (self.poll_timer,self.refresh_timer,self.auto_timer):
@@ -950,6 +954,7 @@ class LauncherUI:
  def update_controls(self):
   if self.tray_context and self.tray_context.window.state()!='withdrawn':self.tray_context.refresh()
   self.refresh_display()
+  if self.performance:self.api_access.refresh_model()
   load_label='Switch model' if self.current or self.status.get().startswith('Running: ') or 'start' in self.active else 'Load model'
   self.start_button.configure(text=load_label)
   self.fit_model_controls()
@@ -1134,23 +1139,34 @@ def provider_router(events=None):
   return result
  return ProfileRouter(active,load)
 
-def provider_server(router=None,**bind):
+def provider_metrics(router):
+ from ai_metrics import MetricsExporter
+ from ai_provider_runtime import catalog
+ collector=Collector(fetch,servers,read_demand_status)
+ def profile():
+  profiles=catalog(PROFILES,PROFILE_STORE);key=router.active(profiles)
+  return key,profiles.get(key,{})
+ return MetricsExporter(collector.collect,profile)
+
+def provider_server(router=None,telemetry=None,**bind):
  from ai_provider import make_server
  from ai_provider_runtime import catalog,loaded_profile
  router=router or provider_router()
  def resident(profiles):return loaded_profile(profiles,servers,strata_listener,ai_ninfer.owned_process,fetch,STRATA)
- return make_server(strata_api_key(),lambda:catalog(PROFILES,PROFILE_STORE),router.active,router=router,loaded_profile=resident,**bind)
+ telemetry=telemetry if telemetry is not None else provider_metrics(router)
+ return make_server(strata_api_key(),lambda:catalog(PROFILES,PROFILE_STORE),router.active,router=router,loaded_profile=resident,telemetry=telemetry,**bind)
 
 @contextlib.contextmanager
 def running_providers(events=None):
  router=provider_router(events)
+ telemetry=provider_metrics(router)
  with contextlib.ExitStack() as stack:
   bindings=[{}]
   if lan:=CONFIG.get('provider_lan'):bindings.append(dict(lan=lan,port=8080,lan_clients=CONFIG.get('provider_lan_clients')))
   providers=[]
   for bind in bindings:
    try:
-    provider=stack.enter_context(provider_server(router=router,**bind))
+    provider=stack.enter_context(provider_server(router=router,telemetry=telemetry,**bind))
    except (OSError,ValueError) as exc:
     record_issue('provider_unavailable',f'Valet provider listener failed: {exc}')
     continue

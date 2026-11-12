@@ -1,5 +1,14 @@
 # Changes
 
+## 0.6.0
+
+- Add a read-only Model ID field and Copy button to API access; follow the selected profile and identify a different loaded profile.
+- Refresh copied profile IDs across selection and display-scale changes without loading models or exposing API tokens.
+- Export authenticated Prometheus gauges at `/metrics` and versioned JSON at `/v1/metrics` on Valet's existing local/LAN listeners.
+- Share cached read-only sampling for throughput, TTFT, prefix reuse, draft acceptance, hardware, slots, profile budgets and bounded numeric-only recent requests.
+- Distinguish provider/backend request counts and stale/unavailable values; preserve API authentication, LAN filtering, model admission and tuned profiles.
+- Exclude prompts, completions, images, tool arguments, credentials and raw backend responses from exported telemetry.
+
 ## 0.5.0
 
 - Show llama.cpp live prefill/output rates and bounded numeric-only request history with native timings, prefix reuse, draft acceptance and streamed time to first token.

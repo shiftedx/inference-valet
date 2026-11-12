@@ -53,7 +53,7 @@ def alias_response(payload, profile_id):
     return payload
 
 
-def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue, performance=None):
+def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_PORT, lan=None, lan_clients=None, router=None, loaded_profile=None, diagnostics=record_issue, performance=None, telemetry=None):
     """Bind loopback or a specific LAN address and restrict LAN peers to its subnet."""
     if not key:
         raise ValueError("Set the Valet API token before starting the provider endpoint.")
@@ -86,10 +86,12 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
         def anthropic(self):
             return endpoint(self.path) in (MESSAGES, COUNT_TOKENS) or bool(self.headers.get("anthropic-version"))
 
-        def send_json(self, status, payload):
+        def send_json(self, status, payload, no_store=False):
             data = json.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            if no_store:
+                self.send_header('Cache-Control', 'no-store')
             if request_id := getattr(self, "request_id", None):
                 self.send_header("X-Request-ID", request_id)
             self.send_header("Content-Length", str(len(data)))
@@ -123,6 +125,24 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             if not self.authorized():
                 return
             path = endpoint(self.path)
+            if path in ('/metrics', '/v1/metrics'):
+                if telemetry is None:
+                    self.error(503, 'Metrics sampling is unavailable.', 'metrics_unavailable')
+                    return
+                snapshot = telemetry.snapshot()
+                snapshot['provider'] = router.snapshot()
+                if path == '/v1/metrics':
+                    self.send_json(200, snapshot, no_store=True)
+                else:
+                    from ai_metrics import prometheus
+                    data = prometheus(snapshot).encode('utf-8')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')
+                    self.send_header('Content-Length', str(len(data)))
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    self.wfile.write(data)
+                return
             catalog = profiles()
             if path == "/v1/models":
                 loaded = resident_profile(catalog)

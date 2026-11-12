@@ -19,13 +19,17 @@ class ApiAccessTests(unittest.TestCase):
                     panel=app.api_access;notebook=app.performance.details_notebook
                     app.performance.toggle_details();notebook.select(app.performance.detail_tabs['API access']);app.window.update()
                     self.assertEqual(panel.value.get(),'fixture-api-token');self.assertTrue(panel.field.cget('show'))
+                    self.assertEqual(panel.model_id.get(),app.selected_profile())
+                    self.assertEqual(str(panel.model_field.cget('state')),'readonly')
+                    self.assertEqual(panel.model_field.cget('show'),'')
+                    panel.model_copy_button.invoke();self.assertEqual(app.window.clipboard_get(),app.selected_profile())
                     panel.eye.invoke();self.assertEqual(panel.field.cget('show'),'')
                     panel.copy_button.invoke();self.assertEqual(app.window.clipboard_get(),'fixture-api-token')
                     self.assertNotIn('fixture-api-token',panel.note.get())
                     notebook.select(app.performance.detail_tabs['Engine']);app.window.update()
                     self.assertTrue(panel.field.cget('show'))
                     notebook.select(app.performance.detail_tabs['API access']);app.window.update()
-                    for control in (panel.field,panel.eye,panel.copy_button):
+                    for control in (panel.field,panel.eye,panel.copy_button,panel.model_field,panel.model_copy_button):
                         self.assertGreaterEqual(control.winfo_width(),control.winfo_reqwidth())
                         self.assertLessEqual(control.winfo_rootx()+control.winfo_width(),notebook.winfo_rootx()+notebook.winfo_width())
                     app.hide();app.window.update();self.assertTrue(panel.field.cget('show'))
@@ -37,5 +41,27 @@ class ApiAccessTests(unittest.TestCase):
             self.assertEqual(app.api_access.eye.cget('state'),'disabled')
             self.assertEqual(app.api_access.copy_button.cget('state'),'disabled')
             self.assertIn('No API token',app.api_access.note.get())
+            self.assertEqual(app.api_access.model_copy_button.cget('state'),'normal')
         finally:app.quit()
+    def test_model_id_tracks_selection_and_distinguishes_loaded_profile(self):
+        app=launcher.LauncherUI(enable_tray=False,observe=False)
+        try:
+            panel=app.api_access;first,second=app.keys[:2]
+            app.current=first;app.picker.current(0);app.update_controls()
+            self.assertIn('is loaded',panel.model_note.get())
+            app.picker.current(1)
+            self.assertEqual(panel.model_id.get(),second)
+            self.assertNotEqual(panel.model_id.get(),launcher.PROFILES[second]['model'])
+            self.assertIn('Loaded profile: '+first,panel.model_note.get())
+            with patch.object(launcher,'start_profile') as start,patch.object(launcher,'stop_all') as stop:
+                panel.model_copy_button.invoke()
+                self.assertEqual(app.window.clipboard_get(),second)
+                start.assert_not_called();stop.assert_not_called()
+            app.current=second;app.update_controls()
+            self.assertIn('is loaded',panel.model_note.get())
+            # Unavailable selections clear the previous ID and disable Copy.
+            app.selected.set('No matching profile')
+            self.assertEqual(panel.model_id.get(),'')
+            self.assertEqual(panel.model_copy_button.cget('state'),'disabled')
+        finally:app.window.clipboard_clear();app.quit()
 if __name__=='__main__':unittest.main()

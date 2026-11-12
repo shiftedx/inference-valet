@@ -64,6 +64,7 @@ See the [native server reference](https://github.com/ggml-org/llama.cpp/tree/mas
 - For LAN access, set `provider_lan` to the host IPv4 address with its subnet prefix and `on_demand.listen_host` to `127.0.0.1`. Valet serves the LAN address on port `8080`, accepts only peers in its subnet by default, and keeps Strata on loopback. Set `provider_lan_clients` to an explicit list of allowed IPv4 subnets to include other trusted LAN segments. Restart both Valet and the managed Strata listener after changing the bind addresses.
 - Open Valet with an API token configured, or run `run.cmd --serve-api` for a standalone listener.
 - `GET /v1/models` lists configured profiles. `GET /v1/models/{id}` returns one profile. Select its ID as the model in your client.
+- Dashboard details → API access → Model ID → Copy copies the selected Valet profile ID. A note identifies a different loaded profile; copying never loads or switches models.
 - Model metadata: `context_length` is the maximum **input + output** tokens per request; `parallel_slots` is configured serving concurrency.
 - `kv_cache_tokens` is total logical live-session KV capacity. `kv_shared: true` means one pool shared by all requests (NInfer/Infernix); never multiply it by `parallel_slots`. For Strata, `kv_shared: false` and `kv_cache_tokens_per_slot` describe independent slots; total capacity is slot capacity × slots. These are logical capacities, not GPU residency or a guarantee that parked conversations remain cached.
 - `default_max_output_tokens` is the configured fallback when a client omits its limit. `max_output_tokens` is the absolute output ceiling before deducting input. `output_tokens_share_context: true` requires subtracting the rendered prompt from that ceiling. `context_reserved_tokens` is already deducted from `max_output_tokens` (Strata reserves 8). Thinking tokens count toward output. Unknown defaults or automatic KV capacities are `null`; Valet does not guess them.
@@ -73,6 +74,40 @@ See the [native server reference](https://github.com/ggml-org/llama.cpp/tree/mas
 - Send the requested profile ID to `POST /v1/chat/completions` or Strata/llama.cpp `POST /v1/responses`. Valet loads an inactive profile, waits for readiness, then forwards the request. Allow up to 620 seconds for loading or waiting behind another model's requests.
 - Same-profile requests run concurrently. Model switches wait for existing Valet requests and streams to finish; local and LAN endpoints share the queue. Manual Unload still cancels startup.
 - Backend model IDs are accepted when active or unambiguous. Use a profile ID to select context/slot variants. Unknown IDs and unsupported endpoints never trigger a load. Load failures return `503 model_load_failed`; queue timeouts return `503 model_wait_timeout`. A running Strata listener can still warm on demand under its existing guards.
+
+### Dashboard metrics
+
+| GET | Format |
+|---|---|
+| `/metrics` | Prometheus text 0.0.4, `valet_` gauges, base units |
+| `/v1/metrics` | JSON, schema `inference-valet.metrics/1` |
+
+- Use the provider root (`http://127.0.0.1:8079` or the configured LAN listener), the existing bearer token or `x-api-key`, and the existing LAN allowlist.
+- Read only; never loads or switches models. One cached collector shared by both listeners/formats; refreshes at most once per two seconds. Scrape every 10–15 seconds.
+- Exposes profile/context/shared-KV capacity/output limits, GPU/CPU/RAM/power, live and last prefill/decode rates, TTFT, prefix reuse, draft acceptance, backend/provider request counts, slot context use, and up to 12 numeric-only recent requests in JSON.
+- Provider admitted/queued counts and backend running/queued counts are separate. Configured KV capacity is not current GPU residency or free KV space.
+- Unknown JSON values are `null`; unavailable Prometheus samples are omitted. `available`, `stale`, `age_seconds` and `sampled_at` identify freshness. Failed collection retains the last snapshot marked stale with `collection_failed`, without exception text.
+- No prompts, completions, images, tool arguments, credentials, client identifiers, process identifiers, paths or raw backend responses. Request history is not exported as Prometheus labels or cumulative counters.
+- Data availability follows the backend; llama.cpp queue depth and unsupported cache counters remain unknown. A cached snapshot is not a benchmark or quality check.
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:VALET_API_KEY" }
+Invoke-RestMethod http://127.0.0.1:8079/v1/metrics -Headers $headers
+```
+
+```yaml
+scrape_configs:
+  - job_name: inference-valet
+    scrape_interval: 15s
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /run/secrets/valet_api_token
+    static_configs:
+      - targets: ['valet-host:8080'] # Configured Valet LAN listener
+```
+
+Example series: `valet_performance_decode_tokens_per_second`, `valet_performance_last_ttft_seconds`, `valet_performance_draft_acceptance_ratio`, `valet_hardware_gpu_memory_used_bytes`, `valet_provider_in_flight`, `valet_telemetry_up`.
 
 ### Claude Code / Anthropic Messages
 
