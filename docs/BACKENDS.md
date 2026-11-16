@@ -147,3 +147,46 @@ Protocol references: [Claude Code gateway compatibility](https://code.claude.com
 - Reasons distinguish missing/invalid lengths, unsupported transfer encoding, oversize or incomplete bodies, read errors/timeouts, invalid JSON/UTF-8, non-object JSON and invalid model fields. Bodies, images, header values, exception text and credentials are not logged.
 - The socket timeout remains **30 seconds without read progress**, not a 30-second total request deadline. Model loading/forwarding waits are separate. Body validation runs before profile selection; a 400 here does not establish a model/router failure.
 - Optional native Strata tool-call diagnostics are packaged separately: see [patch instructions](../backends/strata/patches/README.md). Application upgrades do not modify a live external backend.
+
+
+## Structured outputs and Responses
+
+- `GET /v1/models` and `GET /v1/models/{id}` expose `supports_json_mode`, `supports_json_schema`, `supports_structured_outputs`, `structured_output`, and separate `tool_calling.strict_schema` metadata. Unknown guarantees are `null`.
+- `structured_output` names formats, enforcement method, constrained decoding, schema validation, schema scope, stream buffering, and endpoint-specific request fields. Infernix and llama.cpp use backend-supported grammar subsets; Strata/DeepSeek/Maya prompt then validate and buffer structured streams. Schema compliance is distinct from semantic answer accuracy.
+- Strata schema support is checked in its serving Python environment, cached for five minutes. Install the validator there: `<strata-python> -m pip install "jsonschema>=4.23,<5"`. Strata accepts object-root schemas and local references; malformed or nonconforming generations fail instead of being reported as successful JSON. If a running frontend already cached the missing dependency, its next safe restart is required; installing the package does not reload an engine.
+- Chat Completions forwards `response_format` unchanged. Responses forwards `text.format`, `previous_response_id`, `store`, tools, and streaming options unchanged; only the model alias is translated.
+- `POST /v1/responses` generation and SSE are enabled for Infernix, Strata, DeepSeek, Maya, Delta, and llama.cpp. Separate Responses resource-management routes are not proxied. Valet does not claim Infernix Anthropic `output_config.format` support; strict tool schemas are advertised independently.
+- Discovery and dependency checks never load a model or modify profile tuning. Unsupported legacy backends continue rejecting Responses generation before admission.
+
+
+## Native Project Maya DeepSeek
+
+- Register `engine: "maya"` under `ninfer_profiles`; use the installed `maya-ds4.exe` and the existing GGUF artifact.
+- Supply absolute `server_python`, `server_script` (`serve/server.py`), `pack`, and `tokenizer` paths. Install Maya's Python dependencies separately.
+- Valet fixes the loopback listener, context, and single serving slot. Pass native performance and vision options through `args`; use `--cpu-threads` for worker count, and `--threads on` for chunked prefill.
+- Optional `env` accepts `MAYA_*`, `DS4_*`, Python dependency paths, and CUDA device selection. Configure credentials only through Valet's existing API token; Valet forwards it as `MAYA_API_KEY`.
+- Preflight checks model shards and the pack's referenced assets before switching. Ownership verifies the frontend process, command, runtime config hash, and profile settings; stopping an owned frontend also stops its engine descendants.
+- Readiness checks Maya service identity, model, context, serving slot, engine-backed slots, health, and unloaded state. Discovery advertises explicitly enabled vision and a context shared by input/output. An omitted output limit uses the remaining context.
+- Keep the memory guard enabled. Bound the expert RAM cache and leave headroom for image processing and Windows mapped-file working sets; expert cache size does not change model precision or active experts.
+
+
+## Native Strata DeepSeek engine
+
+- Register `engine: "dsv41"` for the installed `strata-dsv41.exe`; supply the same absolute pack, tokenizer, Python, and `serve/server.py` fields as the Maya adapter.
+- Valet launches Strata's own frontend with `--engine strata` and `arch: "deepseek41"`. The native vision tower needs `--vision on` and its exact model companion in the pack.
+- Credentials use the existing Valet token via `STRATA_API_KEY`. Environment overrides accept `STRATA_*`, `DS4_*`, Python dependency paths, and CUDA device selection; API keys cannot be overridden in profile environment fields.
+- The same owned-process, asset preflight, fixed context/slot, memory guard, and descendant cleanup rules apply. Discovery advertises the single context pool, shared input/output budget, and configured 32K output default.
+- Check quantization compatibility before switching: released DeepSeek engine 0.1.59 does not read Q5_K Engram tables. Existing Unsloth sets using those tables require the upstream Q5_K reader fix; dense Q5_K support alone does not establish Engram support.
+
+
+## Native Delta DeepSeek adapter
+
+- Register `engine: "delta"` for a separately installed `ds41_generate.exe`; provide absolute `server_python`, `server_script` (`serve_ds41.py`), and tokenizer paths in the local profile.
+- Valet fixes the loopback listener, single slot, model artifact and context; extra arguments cannot override them. Credentials use Valet's existing token through `STRATA_API_KEY`.
+- The adapter verifies split GGUF shards and optional draft assets before switching, then verifies the frontend command, runtime config hash, model/context readiness and owned engine descendants.
+- Delta is an optional experimental backend. This adapter does not imply vision, schema enforcement, or performance parity with other engines. Keep engines and model presets outside the repository.
+
+
+### Python frontend ownership on Windows
+
+For the native Python-fronted adapters, `server_python` must name the actual interpreter executable that owns the listener, not a Windows virtual-environment redirector. Obtain it from the serving environment with `python -c "import sys; print(sys._base_executable)"`; expose that environment's dependencies through its `Lib/site-packages` entry in the profile's `PYTHONPATH`. The adapter deliberately refuses to treat an unrelated child listener as owned. Valet's own environment and the existing managed Strata profiles do not need this override.

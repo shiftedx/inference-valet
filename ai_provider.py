@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
 
 from ai_provider_runtime import ProfileRouter, ProfileUnavailable
+from ai_capabilities import RESPONSES_BACKENDS
 
 PORT = 8079
 BACKEND_PORT = 8080
@@ -36,7 +37,8 @@ def model_info(key, profile, loaded=False):
     for field in ("kv_cache_tokens", "kv_shared", "kv_cache_tokens_per_slot",
                   "default_max_output_tokens", "max_output_tokens",
                   "output_tokens_share_context", "context_reserved_tokens",
-                  "supports_vision", "input_modalities"):
+                  "supports_vision", "input_modalities", "supports_json_mode",
+                  "supports_json_schema", "supports_structured_outputs", "structured_output", "tool_calling"):
         if field in profile:
             result[field] = profile[field]
     return result
@@ -253,7 +255,7 @@ def make_server(key, profiles, active_profile, port=PORT, backend_port=BACKEND_P
             if profile is None:
                 self.error(404, "Unknown Valet profile.", "model_not_found", "model")
                 return
-            if path == RESPONSES and profile["engine"] not in ("strata", "llamacpp"):
+            if path == RESPONSES and profile["engine"] not in RESPONSES_BACKENDS:
                 self.error(404, "Use Chat Completions with this backend.", "unsupported_endpoint")
                 return
             try:

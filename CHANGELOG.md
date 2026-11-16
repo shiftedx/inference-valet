@@ -1,5 +1,15 @@
 # Changes
 
+## 0.7.0
+
+- Advertise JSON/schema formats, enforcement method, schema-validator availability, stream buffering, and separate strict tool-call guarantees per backend.
+- Forward Infernix Responses generation and SSE without dropping schema or response-state fields.
+- Manage separately installed Maya, Strata DeepSeek, and Delta engines with asset preflight, fixed listener/context contracts, verified ownership, and guarded descendant cleanup.
+- Support explicit opt-in unloading for exact game executable paths; preserve manual Unload and restore preferences.
+- Add status-text encoding and display-scale regressions.
+- Fix the VERSION mismatch in the public source/archive and check version consistency across release metadata.
+- Keep local profiles, credentials, runtime state, engine/model files, and host tuning out of the release.
+
 ## 0.6.0
 
 - Add a read-only Model ID field and Copy button to API access; follow the selected profile and identify a different loaded profile.

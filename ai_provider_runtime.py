@@ -8,6 +8,7 @@ from collections import deque
 import psutil
 
 from ai_profiles import read_object
+from ai_capabilities import capabilities
 
 
 def positive_int(value):
@@ -74,7 +75,15 @@ def catalog(profiles, store):
                             kv_cache_tokens_per_slot=context, supports_vision=False)
                 limit = option(args, '--n-predict')
                 item['default_max_output_tokens'] = min(limit, ceiling) if limit else None
+            elif profile['engine'] in ('delta','maya','dsv41'):
+                item.update(kv_shared=False,kv_cache_tokens=context,kv_cache_tokens_per_slot=context,
+                            default_max_output_tokens=min(32768,ceiling))
+                if profile['engine']=='maya':item['default_max_output_tokens']=None  # Maya uses the remaining context when no cap is sent.
+                if profile['engine'] in ('maya','dsv41'):
+                    index=args.index('--vision') if '--vision' in args else -1
+                    item['supports_vision']=index>=0 and index+1<len(args) and args[index+1]=='on'
         item["input_modalities"] = ["text", "image"] if item["supports_vision"] else ["text"]
+        item.update(capabilities(profile))
         result[key] = item
     return result
 
@@ -122,7 +131,7 @@ def loaded_profile(profiles, processes, listener_for, native_owner, fetch, strat
             if not native or native[0] != listener:
                 return None
             if (pathlib.Path(profile["artifact"]).resolve() != pathlib.Path(native[1]["artifact"]).resolve()
-                    or pathlib.Path(profile["exe"]).resolve() != pathlib.Path(native[1]["exe"]).resolve()):
+                    or pathlib.Path(profile["exe"]).resolve() != pathlib.Path(native[1].get('engine_exe',native[1]["exe"])).resolve()):
                 return None
             command = listener.cmdline()
             if profile['engine'] == 'llamacpp':
@@ -131,6 +140,11 @@ def loaded_profile(profiles, processes, listener_for, native_owner, fetch, strat
                     return None
                 engine = dict(max_context=profile['context'], max_concurrency=profile['slots'])
                 matching_schema = True
+            elif profile['engine'] in ('delta','maya','dsv41'):
+                adapter=__import__('ai_'+profile['engine']);matching_profile,ready=adapter.matching_profile,adapter.ready
+                if not matching_profile(native[1],profile,command) or not ready(profile,fetch):return None
+                engine=dict(max_context=profile['context'],max_concurrency=1)
+                matching_schema=True
             else:
                 tail = command[command.index("--model-id") + 2:]
                 if len(tail) >= 2 and tail[-2] == "--config":
@@ -143,7 +157,7 @@ def loaded_profile(profiles, processes, listener_for, native_owner, fetch, strat
                 models = fetch("/v1/models")
                 matching_model = any(row.get("id") == profile["model"] for row in models.get("data", []))
                 matching_schema = stats.get("object") == "ninfer.stats" and matching_model
-            elif profile['engine'] != 'llamacpp':
+            elif profile['engine'] not in ('llamacpp','delta','maya','dsv41'):
                 metrics = fetch("/metrics?format=json")
                 engine = metrics.get("engine") or {}
                 matching_schema = (metrics.get("schema") == "infernix.telemetry/1"

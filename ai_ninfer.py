@@ -27,7 +27,7 @@ def descriptors(python):
         if not engine.is_absolute() or not model_file.is_absolute():
             raise ValueError("NInfer profiles require absolute executable and artifact paths")
         backend = entry.get("engine", "ninfer")
-        expected = {"ninfer": "ninfer-serve.exe", "infernix": "infernix-serve.exe", "llamacpp": "llama-server.exe"}
+        expected = {"ninfer": "ninfer-serve.exe", "infernix": "infernix-serve.exe", "llamacpp": "llama-server.exe", "delta":"ds41_generate.exe", "maya":"maya-ds4.exe", "dsv41":"strata-dsv41.exe"}
         if backend not in expected or engine.name.lower() != expected[backend]:
             raise ValueError("NInfer profiles require a matching native serve executable")
         if backend == "ninfer" and entry.get("auth"):
@@ -36,6 +36,9 @@ def descriptors(python):
         if type(context) is not int or context < 1 or type(slots) is not int or slots < 1:
             raise ValueError("NInfer context and slots must be positive integers")
         args = entry.get("args", [])
+        if backend in ('delta','maya','dsv41'):
+            validate=__import__('ai_'+backend).validate
+            validate(entry)
         if backend == "llamacpp":
             from ai_llamacpp import validate
             validate(args)
@@ -53,6 +56,10 @@ def descriptors(python):
                              context=context, slots=slots, model=entry["model"],
                              exe=engine, artifact=model_file, args=args,
                              command=[str(python), str(__file__), key], cwd=str(ROOT))
+        if backend in ('delta','maya','dsv41'):
+            profiles[key][backend]={name:entry[name] for name in ('server_python','server_script','tokenizer')}
+            if backend in ('maya','dsv41'):profiles[key][backend]['pack']=entry['pack']
+            profiles[key][backend]['env']=dict(entry.get('env',{}))
     return profiles
 
 
@@ -60,6 +67,9 @@ def verify_assets(profile):
     for key in ("exe", "artifact"):
         if not profile[key].is_file():
             raise ValueError(f"Missing NInfer {key}: {profile[key]}")
+    if profile['engine'] in ('delta','maya','dsv41'):
+        verify_delta=__import__('ai_'+profile['engine']).verify_assets
+        verify_delta(profile)
     if profile['engine'] == 'llamacpp':
         # A missing draft must fail before the current model is stopped.
         args = profile.get('args', [])
@@ -93,6 +103,9 @@ def owned_process():
         if pathlib.Path(process.exe()).resolve() != pathlib.Path(record["exe"]).resolve():
             return None
         command = process.cmdline()
+        if record.get('backend') in ('delta','maya','dsv41'):
+            matching_record=__import__('ai_'+record['backend']).matching_record
+            return (process,record) if matching_record(record,command) else None
         index = 1
         if pathlib.Path(record['exe']).name.lower() == 'llama-server.exe':
             if len(command) < 3 or command[1] != '--model':
@@ -134,9 +147,14 @@ def run(key):
         from ai_llamacpp import command as llama_command
         command = llama_command(profile)
     credential_file = None
+    runtime_file = None
     child = None
     record = None
     try:
+        if profile['engine'] in ('delta','maya','dsv41'):
+            launch=__import__('ai_'+profile['engine']).launch
+            command,runtime_file,overrides=launch(profile,STATE_DIR)
+            os.environ.update(overrides)
         if CONFIG["ninfer_profiles"][key].get("auth"):
             secret = str(CONFIG.get("strata_api_key") or os.environ.get("STRATA_API_KEY") or "").strip()
             if not secret:
@@ -144,17 +162,26 @@ def run(key):
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".toml",
                                              prefix="ninfer-auth-", dir=STATE_DIR, delete=False) as settings:
                 credential_file = pathlib.Path(settings.name)
-                if llama:
+                if llama or profile['engine'] in ('delta','maya','dsv41'):
                     if '\n' in secret or '\r' in secret or secret.startswith('#'):
                         raise ValueError('Valet token cannot contain newlines or start with #')
                     settings.write(secret + '\n')
                 else:
                     settings.write("api-key = " + json.dumps(secret) + "\n")
-            command.extend(["--api-key-file" if llama else "--config", str(credential_file)])
+            if profile['engine'] in ('delta','maya','dsv41'):
+                os.environ['MAYA_API_KEY' if profile['engine']=='maya' else 'STRATA_API_KEY']=secret
+            else:
+                command.extend(["--api-key-file" if llama else "--config", str(credential_file)])
         child = subprocess.Popen(command, cwd=profile["exe"].parent)
         process = psutil.Process(child.pid)
         record = dict(pid=child.pid, created=process.create_time(), profile=key,
                       exe=str(profile["exe"]), artifact=str(profile["artifact"]))
+        if profile['engine'] in ('delta','maya','dsv41'):
+            fingerprint=__import__('ai_'+profile['engine']).fingerprint
+            import hashlib
+            record.update(backend=profile['engine'],exe=process.exe(),engine_exe=str(profile['exe']),command=process.cmdline(),
+                          runtime_config=str(runtime_file),runtime_sha256=fingerprint(runtime_file),
+                          settings_sha256=hashlib.sha256(json.dumps(profile[profile['engine']],sort_keys=True).encode()).hexdigest())
         write_json(OWNER, record)
         low_since = None
         next_game_check = 0
@@ -179,6 +206,12 @@ def run(key):
         return child.returncode
     finally:
         if child is not None and child.poll() is None:
+            if profile['engine'] in ('delta','maya','dsv41'):
+                try:
+                    for descendant in reversed(psutil.Process(child.pid).children(recursive=True)):
+                        try:descendant.terminate()
+                        except psutil.Error:pass
+                except psutil.Error:pass
             child.terminate()
             child.wait(timeout=15)
         try:
@@ -188,6 +221,7 @@ def run(key):
             pass
         if credential_file:
             credential_file.unlink(missing_ok=True)
+        if runtime_file:runtime_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
