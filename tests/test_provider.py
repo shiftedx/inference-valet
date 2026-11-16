@@ -38,6 +38,7 @@ class ProviderTests(unittest.TestCase):
             "coding-256k": dict(label="Long context", context=262144, slots=1, engine="strata",
                                 model="native"),
             "other": dict(label="Other backend", context=98304, slots=1, engine="infernix", model="other"),
+            "unsupported": dict(label="Legacy",context=8192,slots=1,engine="ninfer",model="legacy"),
         }
         self.backend = self.start(ThreadingHTTPServer(("127.0.0.1", 0), Backend))
         self.backend.requests = []
@@ -59,6 +60,45 @@ class ProviderTests(unittest.TestCase):
         req = Request(f"http://127.0.0.1:{self.api.server_port}/v1{path}", data=data, headers=headers)
         with urlopen(req, timeout=5) as reply:
             return reply.read()
+
+    def test_infernix_responses_json_and_sse_keep_schema_and_state_fields(self):
+        if hasattr(self,'current'):
+            self.current='other'
+        else:
+            self.profiles['coding-128k']['engine']='infernix'
+        key='other' if hasattr(self,'current') else 'coding-128k'
+        schema={'type':'object','properties':{'answer':{'type':'integer'}},'required':['answer'],'additionalProperties':False}
+        for streaming in (False,True):
+            body={'model':key,'input':'Return the answer','stream':streaming,
+                  'text':{'format':{'type':'json_schema','name':'answer','schema':schema,'strict':True}},
+                  'previous_response_id':'resp_fixture','store':True}
+            data=self.request('/responses',body)
+            path,authorization,forwarded=self.backend.requests[-1]
+            self.assertEqual(path,'/v1/responses')
+            self.assertEqual(authorization,'Bearer fixture')
+            self.assertEqual(forwarded,{**body,'model':self.profiles[key]['model']})
+            if streaming:self.assertIn(('"model": "'+key+'"').encode(),data)
+            else:self.assertEqual(json.loads(data)['model'],key)
+
+
+    def test_chat_response_format_reaches_backend_unchanged(self):
+        fmt={'type':'json_schema','json_schema':{'name':'answer','strict':True,'schema':{'type':'object'}}}
+        self.request('/chat/completions',{'model':'coding-128k','messages':[],'response_format':fmt})
+        self.assertEqual(self.backend.requests[-1][2]['response_format'],fmt)
+
+
+    def test_capability_discovery_is_identical_for_list_and_single_model(self):
+        from ai_capabilities import capabilities
+        self.profiles['other'].update(capabilities(self.profiles['other']))
+        listing=json.loads(self.request('/models'))['data']
+        item=next(row for row in listing if row['id']=='other')
+        self.assertEqual(json.loads(self.request('/models/other')),item)
+        self.assertTrue(item['supports_json_schema'])
+        self.assertTrue(item['supports_structured_outputs'])
+        self.assertEqual(item['structured_output']['method'],'grammar_constrained')
+        self.assertTrue(item['tool_calling']['strict_schema'])
+        self.assertFalse(self.backend.requests)
+
 
     def test_discovery_distinguishes_profiles_with_same_backend_model(self):
         result = json.loads(self.request("/models"))
@@ -178,7 +218,7 @@ class ProviderTests(unittest.TestCase):
         for path, body, key, status in [
             ("/models", None, "wrong", 401), ("/models/missing", None, "fixture", 404),
             ("/chat/completions", {"model": "coding-256k"}, "fixture", 503),
-            ("/responses", {"model": "other"}, "fixture", 404),
+            ("/responses", {"model": "unsupported"}, "fixture", 404),
         ]:
             with self.subTest(path=path, status=status), self.assertRaises(HTTPError) as exc:
                 self.request(path, body, key)
@@ -238,7 +278,7 @@ class DynamicProviderTests(ProviderTests):
         for path, body, key, status in [
             ('/models', None, 'wrong', 401),
             ('/chat/completions', {'model':'missing'}, 'fixture', 404),
-            ('/responses', {'model':'other'}, 'fixture', 404),
+            ('/responses', {'model':'unsupported'}, 'fixture', 404),
         ]:
             with self.subTest(path=path), self.assertRaises(HTTPError) as exc:
                 self.request(path, body, key)

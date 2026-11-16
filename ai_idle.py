@@ -13,10 +13,11 @@ class Settings:
  @staticmethod
  def normalize(data):
   if not isinstance(data,dict):raise ValueError('Settings must be an object')
-  games=data.get('extra_games',[]);profile=data.get('last_profile')
+  games=data.get('extra_games',[]);profile=data.get('last_profile');unload=data.get('unload_games',[])
   if not isinstance(games,list) or any(not isinstance(game,str) for game in games):raise ValueError('extra_games must contain executable paths')
+  if not isinstance(unload,list) or any(not isinstance(game,str) for game in unload):raise ValueError('unload_games must contain executable paths')
   if profile is not None and not isinstance(profile,str):raise ValueError('last_profile must be a profile ID')
-  return dict(idle_minutes=restore_minutes(data.get('idle_minutes')),enabled=data.get('enabled',True) is True,last_profile=profile,extra_games=games,demand_armed=data.get('demand_armed',True) is True)
+  return dict(idle_minutes=restore_minutes(data.get('idle_minutes')),enabled=data.get('enabled',True) is True,last_profile=profile,extra_games=games,unload_games=unload,demand_armed=data.get('demand_armed',True) is True)
  def load(self,path):return self.normalize(json.loads(path.read_text(encoding='utf-8-sig')))
  def read(self):
   try:return self.load(self.path)
@@ -79,6 +80,17 @@ def idle_seconds():
 
 class GameDetector:
  def __init__(self):self.roots=[];self.recorded=set();self.refreshed=-1000
+ @staticmethod
+ def running_exact(paths):
+  exact={os.path.normcase(str(pathlib.Path(p).resolve())) for p in paths}
+  if not exact:return []
+  found=[]
+  for proc in psutil.process_iter(['exe','name']):
+   try:
+    exe=proc.info['exe']
+    if exe and os.path.normcase(exe) in exact:found.append(proc.info['name'] or exe)
+   except (psutil.NoSuchProcess,psutil.AccessDenied):continue
+  return sorted(set(found))
  @staticmethod
  def valet_process(proc):
   # Match our actual interpreter and entry point, never a title or a shared

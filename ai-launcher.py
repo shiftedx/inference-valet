@@ -131,6 +131,10 @@ def terminate_verified(p,kind):
   if kind=='ninfer-server':
    owned=ai_ninfer.owned_process()
    if not owned or owned[0]!=p:raise RuntimeError('NInfer process identity changed; nothing stopped.')
+   if owned[1].get('backend') in ('delta','maya','dsv41'):
+    for descendant in reversed(p.children(recursive=True)):
+     try:descendant.terminate()
+     except psutil.NoSuchProcess:pass
   elif classify(p.exe(),p.cmdline())!=kind:raise RuntimeError('Process identity changed; nothing stopped.')
   p.terminate()
  except psutil.NoSuchProcess:pass
@@ -152,6 +156,17 @@ def stop_all(report=lambda _:None):
  gone,alive=psutil.wait_procs([p for p,k in remaining],timeout=30)
  if alive or servers():raise RuntimeError('An AI server is still stopping. Retry Stop AI before starting another profile.')
  report('AI servers stopped.' if owned else 'No Strata server was running.')
+
+def stop_for_games(report=lambda _:None):
+ # Recheck exact opted-in executable paths under the normal engine action lock.
+ # Never treat an unknown detection result or a matching process name as consent.
+ with control_lock():
+  games=GameDetector.running_exact(IDLE_SETTINGS.read().get('unload_games',[]))
+  if not games or not servers():return dict(cancelled=True)
+  IDLE_SETTINGS.update(demand_armed=False)
+  report('Giving GPU priority to '+', '.join(games))
+  stop_all(report)
+  return dict(games=games)
 
 def strata_api_key():
  return str(CONFIG.get('strata_api_key') or os.environ.get('STRATA_API_KEY') or '').strip()
@@ -241,6 +256,9 @@ def start_profile(key,report=lambda _:None,automatic_guard=None,automatic_cancel
      if not owned or owned[1]['profile']!=key or strata_listener([(owned[0],'ninfer-server')]) is None:raise ValueError('Still loading')
      if cfg['engine']=='llamacpp':
       from ai_llamacpp import ready
+      if not ready(cfg,fetch):raise ValueError('Still loading')
+     elif cfg['engine'] in ('delta','maya','dsv41'):
+      ready=__import__('ai_'+cfg['engine']).ready
       if not ready(cfg,fetch):raise ValueError('Still loading')
      IDLE_SETTINGS.update(last_profile=key,demand_armed=False)
     report('Ready: '+cfg['label']+' — http://127.0.0.1:8080');return dict(profile=key,model=cfg['model'],log=str(log))
@@ -982,6 +1000,7 @@ class LauncherUI:
    try:
     result=None
     if action=='start':result=start_profile(key,lambda text:self.events.put(('status',text)),automatic_guard=(lambda:IDLE_SETTINGS.read()['demand_armed'] and IDLE_SETTINGS.read()['last_profile']==key) if recovery else ((lambda:self.auto_sample(True)[0] and IDLE_SETTINGS.read()['last_profile']==key) if automatic else None),automatic_cancel=(lambda:bool(self.game_detector.running(IDLE_SETTINGS.read()['extra_games'],strict=True))) if automatic and not recovery else None)
+    elif action=='game-stop':result=stop_for_games(lambda text:self.events.put(('status',text)))
     else:
      with control_lock():stop_all(lambda text:self.events.put(('status',text)))
     self.events.put(('done',(action,key,result)))
@@ -1000,7 +1019,8 @@ class LauncherUI:
     if 'API recovery paused:' in payload['reason']:
      self.notify_issue(dict(code='recovery_paused',message=payload['reason']))
     self.auto_enabled=payload['enabled'];self.auto_var.set(self.auto_enabled);self.auto_status.set(payload['reason']);self.update_controls()
-    if payload.get('recover') and not self.active:self.begin('start',payload['profile'],automatic=True,recovery=True)
+    if payload.get('unload') and not self.active:self.begin('game-stop',automatic=True)
+    elif payload.get('recover') and not self.active:self.begin('start',payload['profile'],automatic=True,recovery=True)
     elif payload['due'] and not self.active:self.begin('start',payload['profile'],automatic=True)
    elif kind=='show':self.show()
    elif kind=='popup':self.show_popup(payload)
@@ -1048,7 +1068,8 @@ class LauncherUI:
       self.idle_policy.failed(time.monotonic());self.auto_status.set('Auto reload failed; retry in 5 minutes')
       with (LOGS/'idle-errors.log').open('a',encoding='utf-8') as log:log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+payload[1]+'\n')
      else:self.show();messagebox.showerror('Inference Valet',payload[1],parent=self.window)
-    elif action=='stop':self.current=None
+    elif action in ('stop','game-stop'):
+     if not (payload[2] or {}).get('cancelled'):self.current=None
     elif not (payload[2] or {}).get('cancelled'):self.current=None if (payload[2] or {}).get('unloaded') else payload[1]
     self.update_controls()
     if self.stop_only and not self.active and self.quit():return
@@ -1083,6 +1104,8 @@ class LauncherUI:
   except Exception:
    if not demand:raise
    games=['game state unavailable']
+  unload_games=GameDetector.running_exact(settings.get('unload_games',[]))
+  games=sorted(set(games+unload_games))
   stamp=LOGS/'last-stop.txt';stop=int(stamp.read_text())/1e9 if stamp.exists() else 0
   owned=bool(live) or bool(servers());busy=owned or (bool(self.active) and not ignore_action)
   due,reason=self.idle_policy.decide(time.monotonic(),idle,games,busy,settings['enabled'],profile if profile in PROFILES else None,stop,settings.get('idle_minutes',20))
@@ -1091,7 +1114,9 @@ class LauncherUI:
    recover,recovery_reason=self.recovery_policy.decide(time.time(),settings['demand_armed'],owned,listener_present(socket) if not owned else True,games,bool(self.active) and not ignore_action)
    if settings['demand_armed']:due=False
    if not owned and settings['demand_armed']:reason=recovery_reason
-  reading=dict(due=due,recover=recover,reason=reason,enabled=settings['enabled'],profile=profile,idle_seconds=round(idle,1),games=games,pid=os.getpid(),checked_at=time.time())
+  unload=bool(unload_games) and not self.active and bool(servers())
+  if unload:reason='Gaming priority: unloading for '+', '.join(unload_games)
+  reading=dict(due=due,recover=recover,unload=unload,reason=reason,enabled=settings['enabled'],profile=profile,idle_seconds=round(idle,1),games=sorted(set(games+unload_games)),pid=os.getpid(),checked_at=time.time())
   return due,reading
  def check_auto(self):
   if self.closing:return

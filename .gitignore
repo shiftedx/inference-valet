@@ -24,3 +24,27 @@ integration-backups/
 
 # Local deployment snapshots
 backups/
+
+# Never include downloaded engines, weights, or private key material
+engine/
+engines/
+models/
+packs/
+*.exe
+*.dll
+*.gguf
+*.safetensors
+*.ninfer
+*.infernix
+*.pack
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.pem
+*.key
+*.p12
+*.pfx
+*.pdb
+*.lib
+*.obj

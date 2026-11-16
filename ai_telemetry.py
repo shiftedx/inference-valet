@@ -151,6 +151,11 @@ class Collector:
        props=self.fetch('/props');slots=self.fetch('/slots')
        rates=self.llama_rates.sample(identity,slots,sampled)
        metrics,status=telemetry(props,slots,rates,self.llama_history.read((listener.pid,listener.create_time())))
+      elif listener.name().lower() in ('python.exe','pythonw.exe'):
+       metrics=self.fetch('/metrics');status=self.fetch('/v1/status')
+       if status.get('service')=='maya':
+        slots=self.fetch('/slots')
+        status={**status,'loaded':bool(slots) and health is not None and health.get('unloaded') is False}
       else:metrics,status=adapt_infernix(self.fetch('/metrics?format=json'))
      except (OSError,ValueError):pass
     else:
@@ -200,9 +205,13 @@ class Collector:
   activity=build_activity(status,metrics,demand,out['hardware'],gpu_reading,
                          {p.pid for p,k in processes},verified=verified,health=health,
                          options={**DEFAULTS,**CONFIG.get('on_demand',{})})
-  activity['engine']=({'ninfer-serve.exe':'ninfer','llama-server.exe':'llamacpp'}.get(listener.name().lower(),'infernix')) if native else 'strata' if verified else None
+  activity['engine']=({'ninfer-serve.exe':'ninfer','llama-server.exe':'llamacpp','python.exe':'delta','pythonw.exe':'delta'}.get(listener.name().lower(),'infernix')) if native else 'strata' if verified else None
+  if native and verified and listener.name().lower() in ('python.exe','pythonw.exe'):
+   from ai_ninfer import owned_process
+   owner=owned_process()
+   if owner and owner[0]==listener:activity['engine']=owner[1].get('backend')
   if native and verified:
-   activity['detail']=activity['detail'].replace('Strata',{'ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(activity['engine'],'Infernix'))
+   activity['detail']=activity['detail'].replace('Strata',{'ninfer':'NInferEZ','llamacpp':'llama.cpp','delta':'Delta','maya':'Maya','dsv41':'Strata'}.get(activity['engine'],'Infernix'))
   activity['comfy']=read_comfy(CONFIG.get('activity',{}).get('comfyui_url'))
   comfy=activity['comfy']
   # Queue activity alone does not prove GPU use or grant admission priority.
@@ -672,7 +681,7 @@ class PerformancePanel:
   self.activity_title_label.configure(wraplength=max(80,width-dot_width-(0 if stacked else marks_width+gap)))
 
  def set_activity_status(self,title,detail,state,engine='strata'):
-  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ','llamacpp':'llama.cpp'}.get(engine)
+  backend={'strata':'Strata','infernix':'Infernix','ninfer':'NInferEZ','llamacpp':'llama.cpp','delta':'Delta','maya':'Maya','dsv41':'Strata'}.get(engine)
   self.activity_title.set((backend+' · ' if backend else '')+title);self.activity_note.set(detail)
   self.status_dot.configure(fg=THEME['success'] if state in ('ready','reading','generating') else THEME['warning'] if state in ('blocked','stale','error') else THEME['muted'])
   self.activity_title_label.configure(fg=THEME['error'] if state=='error' else THEME['warning'] if state in ('unavailable','stale','blocked') else THEME['text'])

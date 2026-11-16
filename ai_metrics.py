@@ -7,7 +7,7 @@ import time
 SCHEMA = 'inference-valet.metrics/1'
 STATES = {'ready', 'reading', 'generating', 'loading', 'busy', 'blocked', 'unloaded', 'offline', 'unavailable'}
 FINISHES = {'stop', 'length', 'cancelled', 'canceled', 'cancel', 'error', 'failed', 'complete', 'completed', 'eos', 'finished'}
-BACKENDS = {'strata', 'infernix', 'ninfer', 'llamacpp'}
+BACKENDS = {'strata', 'infernix', 'ninfer', 'llamacpp', 'delta', 'maya', 'dsv41'}
 HARDWARE = {
     'cpu_utilization_ratio': ('cpu', .01), 'ram_used_bytes': ('ram_used', 1),
     'ram_total_bytes': ('ram_total', 1), 'gpu_utilization_ratio': ('gpu_util', .01),

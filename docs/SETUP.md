@@ -90,7 +90,7 @@ For a Git release checkout after backing up local changes and exiting Valet:
 
 ```powershell
 git fetch --tags origin
-git switch --detach v0.5.0
+git switch --detach v0.7.0
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 ```
 
@@ -119,3 +119,8 @@ Use isolated `AI_PROFILES_CONFIG` and `state_dir` paths. Core tests use temporar
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe ai-launcher.py --check-ui
 ```
+
+
+## Opt-in game unload targets
+
+`unload_games` in the local idle settings accepts explicit game executable paths. Only a verified exact path match triggers an owned-model unload; a matching process name in another folder does not. The default list is empty. Existing game detection, game-priority admission and manual Unload remain independent of this opt-in list. Do not publish your local settings or executable paths.
